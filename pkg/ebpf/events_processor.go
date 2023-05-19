@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"os"
 
 	"golang.org/x/sys/unix"
 	"kernel.org/pub/linux/libs/security/libcap/cap"
@@ -186,6 +187,10 @@ func (t *Tracee) processSchedProcessExec(event *trace.Event) error {
 		// already died)
 		pids := t.pidsInMntns.GetBucket(uint32(event.MountNS))
 		for _, pid := range pids { // will break on success
+			procFilePath := fmt.Sprintf("/proc/%s", strconv.Itoa(int(pid)));
+			if _, err := os.Stat(procFilePath); os.IsNotExist(err) {
+					continue;
+			}
 			err = nil
 			sourceFilePath := fmt.Sprintf("/proc/%s/root%s", strconv.Itoa(int(pid)), filePath)
 			sourceFileCtime, err := parse.ArgVal[uint64](event, "ctime")

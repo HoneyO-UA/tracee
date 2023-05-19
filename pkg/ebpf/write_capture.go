@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/aquasecurity/tracee/pkg/bufferdecoder"
 	"github.com/aquasecurity/tracee/pkg/errfmt"
@@ -79,10 +80,11 @@ func (t *Tracee) processFileWrites(ctx context.Context) {
 				if vfsMeta.Mode&_S_IFSOCK == _S_IFSOCK || vfsMeta.Mode&_S_IFCHR == _S_IFCHR || vfsMeta.Mode&_S_IFIFO == _S_IFIFO {
 					appendFile = true
 				}
+				timeStamp := time.Now().UnixMicro()
 				if vfsMeta.Pid == 0 {
-					filename = fmt.Sprintf("write.dev-%d.inode-%d", vfsMeta.DevID, vfsMeta.Inode)
+					filename = fmt.Sprintf("write.%d.dev-%d.inode-%d", timeStamp, vfsMeta.DevID, vfsMeta.Inode)
 				} else {
-					filename = fmt.Sprintf("write.dev-%d.inode-%d.pid-%d", vfsMeta.DevID, vfsMeta.Inode, vfsMeta.Pid)
+					filename = fmt.Sprintf("write.%d.dev-%d.inode-%d.pid-%d", timeStamp, vfsMeta.DevID, vfsMeta.Inode, vfsMeta.Pid)
 				}
 			} else if meta.BinType == bufferdecoder.SendMprotect {
 				var mprotectMeta bufferdecoder.MprotectWriteMeta
