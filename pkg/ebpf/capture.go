@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/aquasecurity/tracee/pkg/bufferdecoder"
 	"github.com/aquasecurity/tracee/pkg/errfmt"
@@ -85,20 +86,23 @@ func (t *Tracee) processFileCaptures(ctx context.Context) {
 				} else {
 					operation = "write"
 				}
+				timeStamp := time.Now().UnixMicro()
 				if vfsMeta.Pid == 0 {
 					filename = fmt.Sprintf(
-						"%s.dev-%d.inode-%d",
+						"%s.dev-%d.inode-%d.%d",
 						operation,
 						vfsMeta.DevID,
 						vfsMeta.Inode,
+						timeStamp
 					)
 				} else { // Only applies for write to /dev/null
 					filename = fmt.Sprintf(
-						"%s.dev-%d.inode-%d.pid-%d",
+						"%s.dev-%d.inode-%d.pid-%d.%d",
 						operation,
 						vfsMeta.DevID,
 						vfsMeta.Inode,
 						vfsMeta.Pid,
+						timeStamp
 					)
 				}
 			} else if meta.BinType == bufferdecoder.SendMprotect {
