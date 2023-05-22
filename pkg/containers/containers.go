@@ -148,7 +148,7 @@ func (c *Containers) populate() error {
 		inodeNumber := stat.Ino
 		statusChange := time.Unix(stat.Ctim.Sec, stat.Ctim.Nsec)
 		_, err = c.CgroupUpdate(inodeNumber, path, statusChange)
-
+		
 		return errfmt.WrapError(err)
 	}
 
@@ -163,7 +163,7 @@ func (c *Containers) CgroupUpdate(cgroupId uint64, path string, ctime time.Time)
 	container := cruntime.ContainerMetadata{
 		ContainerId: containerId,
 	}
-
+	
 	info := CgroupInfo{
 		Path:          path,
 		Container:     container,
@@ -176,6 +176,7 @@ func (c *Containers) CgroupUpdate(cgroupId uint64, path string, ctime time.Time)
 	c.cgroupsMap[uint32(cgroupId)] = info
 	c.mtx.Unlock()
 
+	c.EnrichCgroupInfo(cgroupId)
 	return info, nil
 }
 
@@ -185,7 +186,6 @@ func (c *Containers) CgroupUpdate(cgroupId uint64, path string, ctime time.Time)
 // this function shouldn't be called twice for the same cgroupId unless attempting a retry
 func (c *Containers) EnrichCgroupInfo(cgroupId uint64) (cruntime.ContainerMetadata, error) {
 	var metadata cruntime.ContainerMetadata
-
 	c.mtx.RLock()
 	info, ok := c.cgroupsMap[uint32(cgroupId)]
 	c.mtx.RUnlock()
@@ -346,13 +346,27 @@ func (c *Containers) CgroupMkdir(cgroupId uint64, subPath string, hierarchyID ui
 	return c.CgroupUpdate(cgroupId, subPath, curTime)
 }
 
-// FindContainerCgroupID32LSB returns the 32 LSB of the Cgroup ID for a given container ID
-func (c *Containers) FindContainerCgroupID32LSB(containerID string) []uint32 {
+// FindContainerCgroupID32LSB returns the 32 LSB of the Cgroup ID for a given label and it's value
+func (c *Containers) FindContainerCgroupID32LSB(label string, value string) []uint32 {
+
+	filter := func(container cruntime.ContainerMetadata , v string) bool {
+		switch label {
+		case "namespace": 
+			return container.Pod.Namespace  == v
+		case "podName": 
+			return strings.HasPrefix(container.Pod.Name, v)
+		case "id": 
+			return strings.HasPrefix(container.ContainerId, v)
+		default:
+			return false
+		}
+	}
+
 	var cgroupIDs []uint32
 	c.mtx.RLock()
 	defer c.mtx.RUnlock()
 	for k, v := range c.cgroupsMap {
-		if strings.HasPrefix(v.Container.ContainerId, containerID) {
+		if filter(v.Container, value) {
 			cgroupIDs = append(cgroupIDs, k)
 		}
 	}

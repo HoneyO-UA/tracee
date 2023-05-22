@@ -3,6 +3,8 @@ package filters
 import (
 	"encoding/binary"
 	"unsafe"
+	"regexp"
+	"fmt"
 
 	bpf "github.com/aquasecurity/libbpfgo"
 
@@ -22,6 +24,7 @@ func NewContainerFilter(mapName string) *ContainerFilter {
 }
 
 func (f *ContainerFilter) UpdateBPF(bpfModule *bpf.Module, cts *containers.Containers, policyID uint) error {
+	
 	if !f.Enabled() {
 		return nil
 	}
@@ -33,59 +36,74 @@ func (f *ContainerFilter) UpdateBPF(bpfModule *bpf.Module, cts *containers.Conta
 
 	filterVal := make([]byte, 16)
 
+	parseFilter := func(filter string) (string, string) {
+		re := regexp.MustCompile(`(\w+):([\w\-_]+)`)
+		match := re.FindStringSubmatch(filter)
+		if len(match) != 3 {
+			return "", ""
+		}
+		return match[1], match[2]
+	}
+
+	cgroupIDsNotEqual := make(map[uint32]bool)
+
 	// first initialize notEqual values since equality should take precedence
 	for _, notEqualFilter := range f.NotEqual() {
-		cgroupIDs := cts.FindContainerCgroupID32LSB(notEqualFilter)
-		if cgroupIDs == nil {
-			return errfmt.Errorf("container id not found: %s", notEqualFilter)
-		}
-		if len(cgroupIDs) > 1 {
-			return errfmt.Errorf("container id is ambiguous: %s", notEqualFilter)
+		label, value := parseFilter(notEqualFilter)
+		if label == "" || value  == "" {
+			return errfmt.Errorf("Invalid label or value in filter clause")
 		}
 
-		var equalInPolicies, equalitySetInPolicies uint64
-		curVal, err := filterMap.GetValue(unsafe.Pointer(&cgroupIDs[0]))
-		if err == nil {
-			equalInPolicies = binary.LittleEndian.Uint64(curVal[0:8])
-			equalitySetInPolicies = binary.LittleEndian.Uint64(curVal[8:16])
-		}
-
-		// filterNotEqual == 0, so clear n bitmask bit
-		utils.ClearBit(&equalInPolicies, policyID)
-		utils.SetBit(&equalitySetInPolicies, policyID)
-
-		binary.LittleEndian.PutUint64(filterVal[0:8], equalInPolicies)
-		binary.LittleEndian.PutUint64(filterVal[8:16], equalitySetInPolicies)
-		if err = filterMap.Update(unsafe.Pointer(&cgroupIDs[0]), unsafe.Pointer(&filterVal[0])); err != nil {
-			return errfmt.WrapError(err)
+		cgroupIDs := cts.FindContainerCgroupID32LSB(label, value)
+		for _, cgroupID := range cgroupIDs {
+			cgroupIDsNotEqual[cgroupID] = true
+			var equalInPolicies, equalitySetInPolicies uint64
+			curVal, err := filterMap.GetValue(unsafe.Pointer(&cgroupID))
+			if err == nil {
+				equalInPolicies = binary.LittleEndian.Uint64(curVal[0:8])
+				equalitySetInPolicies = binary.LittleEndian.Uint64(curVal[8:16])
+			}
+	
+			// filterNotEqual == 0, so clear n bitmask bit
+			utils.ClearBit(&equalInPolicies, policyID)
+			utils.SetBit(&equalitySetInPolicies, policyID)
+	
+			binary.LittleEndian.PutUint64(filterVal[0:8], equalInPolicies)
+			binary.LittleEndian.PutUint64(filterVal[8:16], equalitySetInPolicies)
+			if err = filterMap.Update(unsafe.Pointer(&cgroupID), unsafe.Pointer(&filterVal[0])); err != nil {
+				return errfmt.WrapError(err)
+			}
 		}
 	}
 
 	// now - setup equality filters
 	for _, equalFilter := range f.Equal() {
-		cgroupIDs := cts.FindContainerCgroupID32LSB(equalFilter)
-		if cgroupIDs == nil {
-			return errfmt.Errorf("container id not found: %s", equalFilter)
-		}
-		if len(cgroupIDs) > 1 {
-			return errfmt.Errorf("container id is ambiguous: %s", equalFilter)
+		label, value := parseFilter(equalFilter)
+		if label == "" || value  == "" {
+			return errfmt.Errorf("Invalid label or value in filter clause")
 		}
 
-		var equalInPolicies, equalitySetInPolicies uint64
-		curVal, err := filterMap.GetValue(unsafe.Pointer(&cgroupIDs[0]))
-		if err == nil {
-			equalInPolicies = binary.LittleEndian.Uint64(curVal[0:8])
-			equalitySetInPolicies = binary.LittleEndian.Uint64(curVal[8:16])
-		}
-
-		// filterEqual == 1, so set n bitmask bit
-		utils.SetBit(&equalInPolicies, policyID)
-		utils.SetBit(&equalitySetInPolicies, policyID)
-
-		binary.LittleEndian.PutUint64(filterVal[0:8], equalInPolicies)
-		binary.LittleEndian.PutUint64(filterVal[8:16], equalitySetInPolicies)
-		if err = filterMap.Update(unsafe.Pointer(&cgroupIDs[0]), unsafe.Pointer(&filterVal[0])); err != nil {
-			return errfmt.WrapError(err)
+		cgroupIDs := cts.FindContainerCgroupID32LSB(label, value)
+		for _, cgroupID := range cgroupIDs {
+			if cgroupIDsNotEqual[cgroupID] {
+				continue
+			}
+			var equalInPolicies, equalitySetInPolicies uint64
+			curVal, err := filterMap.GetValue(unsafe.Pointer(&cgroupID))
+			if err == nil {
+				equalInPolicies = binary.LittleEndian.Uint64(curVal[0:8])
+				equalitySetInPolicies = binary.LittleEndian.Uint64(curVal[8:16])
+			}
+	
+			// filterEqual == 1, so set n bitmask bit
+			utils.SetBit(&equalInPolicies, policyID)
+			utils.SetBit(&equalitySetInPolicies, policyID)
+	
+			binary.LittleEndian.PutUint64(filterVal[0:8], equalInPolicies)
+			binary.LittleEndian.PutUint64(filterVal[8:16], equalitySetInPolicies)
+			if err = filterMap.Update(unsafe.Pointer(&cgroupID), unsafe.Pointer(&filterVal[0])); err != nil {
+				return errfmt.WrapError(err)
+			}
 		}
 	}
 
