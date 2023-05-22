@@ -4,8 +4,7 @@ import (
 	"encoding/binary"
 	"unsafe"
 	"regexp"
-	"fmt"
-
+	
 	bpf "github.com/aquasecurity/libbpfgo"
 
 	"github.com/aquasecurity/tracee/pkg/containers"
