@@ -18,7 +18,7 @@ MAKEFLAGS += --no-print-directory
 
 CMD_AWK ?= awk
 CMD_CAT ?= cat
-CMD_CLANG ?= clang
+CMD_CLANG ?= clang-12
 CMD_CUT ?= cut
 CMD_ERRCHECK ?= errcheck
 CMD_GIT ?= git
