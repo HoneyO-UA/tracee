@@ -404,6 +404,11 @@ func (p jsonEventPrinter) Init() error { return nil }
 func (p jsonEventPrinter) Preamble() {}
 
 func (p jsonEventPrinter) Print(event trace.Event) {
+	for idx, arg := range event.Args {
+		event.Args[idx].Value = map[string]any{
+			"content": arg.Value,
+		}
+	}
 	eBytes, err := json.Marshal(event)
 	if err != nil {
 		logger.Errorw("Error marshaling event to json", "error", err)
