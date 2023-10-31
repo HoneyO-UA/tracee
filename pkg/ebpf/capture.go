@@ -93,7 +93,7 @@ func (t *Tracee) processFileCaptures(ctx context.Context) {
 						operation,
 						vfsMeta.DevID,
 						vfsMeta.Inode,
-						timeStamp
+						timeStamp,
 					)
 				} else { // Only applies for write to /dev/null
 					filename = fmt.Sprintf(
@@ -102,7 +102,7 @@ func (t *Tracee) processFileCaptures(ctx context.Context) {
 						vfsMeta.DevID,
 						vfsMeta.Inode,
 						vfsMeta.Pid,
-						timeStamp
+						timeStamp,
 					)
 				}
 			} else if meta.BinType == bufferdecoder.SendMprotect {
