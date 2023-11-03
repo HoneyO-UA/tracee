@@ -19,6 +19,8 @@ import (
 )
 
 func TestEngine_ConsumeSources(t *testing.T) {
+	t.Parallel()
+
 	testCases := []struct {
 		name              string
 		inputEvent        protocol.Event
@@ -331,7 +333,7 @@ func TestEngine_ConsumeSources(t *testing.T) {
 				logger.LoggingConfig{
 					Logger: logger.NewLogger(logger.LoggerConfig{
 						Writer:  loggerBuf,
-						Level:   logger.InfoLevel,
+						Level:   logger.NewAtomicLevelAt(logger.InfoLevel),
 						Encoder: logger.NewJSONEncoder(logger.NewProductionConfig().EncoderConfig),
 					}),
 					Aggregate: false,
@@ -357,9 +359,11 @@ func TestEngine_ConsumeSources(t *testing.T) {
 
 			e, err := NewEngine(tc.config, inputs, outputChan)
 			require.NoError(t, err, "constructing engine")
-			go func() {
-				e.Start(ctx)
-			}()
+
+			err = e.Init()
+			require.NoError(t, err, "initializing engine")
+
+			go e.Start(ctx)
 
 			// send a test event
 			e.inputs.Tracee <- tc.inputEvent
@@ -384,6 +388,8 @@ func TestEngine_ConsumeSources(t *testing.T) {
 }
 
 func TestEngine_GetSelectedEvents(t *testing.T) {
+	t.Parallel()
+
 	sigs := []detect.Signature{
 		&signature.FakeSignature{
 			FakeGetSelectedEvents: func() ([]detect.SignatureEventSelector, error) {
@@ -419,6 +425,10 @@ func TestEngine_GetSelectedEvents(t *testing.T) {
 	config := Config{Signatures: sigs}
 	e, err := NewEngine(config, EventSources{Tracee: make(chan protocol.Event)}, make(chan detect.Finding))
 	require.NoError(t, err, "constructing engine")
+
+	err = e.Init()
+	require.NoError(t, err, "initializing engine")
+
 	se := e.GetSelectedEvents()
 	expected := []detect.SignatureEventSelector{
 		{
@@ -441,6 +451,8 @@ func TestEngine_GetSelectedEvents(t *testing.T) {
 }
 
 func TestEngine_LoadSignature(t *testing.T) {
+	t.Parallel()
+
 	testCases := []struct {
 		name          string
 		signatures    []detect.Signature
@@ -478,7 +490,7 @@ func TestEngine_LoadSignature(t *testing.T) {
 			}
 
 			// check that signature stats were correctly incremented
-			assert.Equal(t, tc.expectedCount, int(engine.Stats().Signatures.Read()))
+			assert.Equal(t, tc.expectedCount, int(engine.Stats().Signatures.Get()))
 			close(input)
 		})
 	}

@@ -54,10 +54,15 @@ func main() {
 				return fmt.Errorf("invalid target specified: %s", strings.ToLower(c.String("rego-runtime-target")))
 			}
 
+			var rulesDir []string
+			if c.String("rules-dir") != "" {
+				rulesDir = []string{c.String("rules-dir")}
+			}
+
 			sigs, err := signature.Find(
 				target,
 				c.Bool("rego-partial-eval"),
-				c.String("rules-dir"),
+				rulesDir,
 				c.StringSlice("rules"),
 				c.Bool("rego-aio"),
 			)
@@ -137,20 +142,25 @@ func main() {
 			config := engine.Config{
 				SignatureBufferSize: c.Uint(signatureBufferFlag),
 				Signatures:          sigs,
+				DataSources:         []detect.DataSource{},
 			}
 			e, err := engine.NewEngine(config, inputs, output)
 			if err != nil {
 				return fmt.Errorf("constructing engine: %w", err)
 			}
 
-			httpServer, err := server.PrepareServer(
-				c.String(server.ListenEndpointFlag),
+			httpServer, err := server.PrepareHTTPServer(
+				c.String(server.HTTPListenEndpointFlag),
 				c.Bool(server.MetricsEndpointFlag),
 				c.Bool(server.HealthzEndpointFlag),
 				c.Bool(server.PProfEndpointFlag),
 				c.Bool(server.PyroscopeAgentFlag),
 			)
+			if err != nil {
+				return err
+			}
 
+			err = e.Init()
 			if err != nil {
 				return err
 			}
@@ -242,7 +252,7 @@ func main() {
 				Value: false,
 			},
 			&cli.StringFlag{
-				Name:  server.ListenEndpointFlag,
+				Name:  server.HTTPListenEndpointFlag,
 				Usage: "listening address of the metrics endpoint server",
 				Value: ":4466",
 			},

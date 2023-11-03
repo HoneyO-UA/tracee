@@ -6,299 +6,319 @@ import (
 
 	"github.com/aquasecurity/tracee/pkg/errfmt"
 	"github.com/aquasecurity/tracee/pkg/events"
+	"github.com/aquasecurity/tracee/pkg/filters"
+	"github.com/aquasecurity/tracee/pkg/logger"
 	"github.com/aquasecurity/tracee/pkg/policy"
+	"github.com/aquasecurity/tracee/pkg/policy/v1beta1"
 )
 
-// PolicyFile is the structure of the policy file
-type PolicyFile struct {
-	Name          string   `yaml:"name"`
-	Description   string   `yaml:"description"`
-	Scope         []string `yaml:"scope"`
-	DefaultAction string   `yaml:"defaultAction"`
-	Rules         []Rule   `yaml:"rules"`
-}
-
-// Rule is the structure of the rule in the policy file
-type Rule struct {
-	Event  string   `yaml:"event"`
-	Filter []string `yaml:"filter"`
-	Action string   `yaml:"action"`
-}
-
-// PrepareFilterMapForPolicies prepares the FilterMap for the policies
-func PrepareFilterMapFromPolicies(policies []PolicyFile) (FilterMap, error) {
-	filterMap := make(FilterMap)
+// PrepareFilterMapsForPolicies prepares the scope and events PolicyFilterMap for the policies
+func PrepareFilterMapsFromPolicies(policies []v1beta1.PolicyFile) (PolicyScopeMap, PolicyEventMap, error) {
+	policyScopeMap := make(PolicyScopeMap)
+	policyEventsMap := make(PolicyEventMap)
 
 	if len(policies) == 0 {
-		return nil, errfmt.Errorf("no policies provided")
+		return nil, nil, errfmt.Errorf("no policies provided")
 	}
 
 	if len(policies) > policy.MaxPolicies {
-		return nil, errfmt.Errorf("too many policies provided, there is a limit of %d policies", policy.MaxPolicies)
+		return nil, nil, errfmt.Errorf("too many policies provided, there is a limit of %d policies", policy.MaxPolicies)
 	}
 
 	policyNames := make(map[string]bool)
 
 	for pIdx, p := range policies {
-		err := validatePolicy(p)
-		if err != nil {
-			return nil, err
+		if _, ok := policyNames[p.Name()]; ok {
+			return nil, nil, errfmt.Errorf("policy %s already exist", p.Name())
 		}
+		policyNames[p.Name()] = true
 
-		if _, ok := policyNames[p.Name]; ok {
-			return nil, errfmt.Errorf("policy %s already exist", p.Name)
-		}
-		policyNames[p.Name] = true
-
-		filterFlags := make([]*filterFlag, 0)
-
-		err = validateAction(p.Name, p.DefaultAction)
-		if err != nil {
-			return nil, err
-		}
+		scopeFlags := make([]scopeFlag, 0)
 
 		// scope
-		for _, s := range p.Scope {
+		for _, s := range p.Scope() {
 			s = strings.ReplaceAll(s, " ", "")
 
-			if s == "global" && len(p.Scope) > 1 {
-				return nil, errfmt.Errorf("policy %s, global scope must be unique", p.Name)
+			if s == "global" && len(p.Scope()) > 1 {
+				return nil, nil, errfmt.Errorf("policy %s, global scope must be unique", p.Name())
 			}
 
 			if s == "global" {
 				break
 			}
 
-			var scope, filterName, operatorAndValues string
-
-			switch s {
-			case "follow", "!container", "container":
-				scope = s
-				filterName = s
-				operatorAndValues = ""
-			default:
-				operatorIdx := strings.IndexAny(s, "=!<>")
-
-				if operatorIdx == -1 {
-					return nil, errfmt.Errorf("policy %s, scope %s is not valid", p.Name, s)
-				}
-
-				scope = s[:operatorIdx]
-				filterName = s[:operatorIdx]
-				operatorAndValues = s[operatorIdx:]
-			}
-
-			err := validateScope(p.Name, scope)
+			parsed, err := parseScopeFlag(s)
 			if err != nil {
-				return nil, err
+				return nil, nil, errfmt.WrapError(err)
 			}
 
-			filterFlags = append(filterFlags, &filterFlag{
-				full:              s,
-				filterName:        filterName,
-				operatorAndValues: operatorAndValues,
-				policyIdx:         pIdx,
-				policyName:        p.Name,
-			})
+			scopeFlags = append(scopeFlags, parsed)
 		}
 
-		evts := make(map[string]bool)
+		policyScopeMap[pIdx] = policyScopes{
+			policyName: p.Name(),
+			scopeFlags: scopeFlags,
+		}
 
-		for _, r := range p.Rules {
-			err := validateEvent(p.Name, r.Event)
+		eventFlags := make([]eventFlag, 0)
+
+		for _, r := range p.Rules() {
+			evtFlags, err := parseEventFlag(r.Event)
 			if err != nil {
-				return nil, err
+				return nil, nil, errfmt.WrapError(err)
 			}
+			eventFlags = append(eventFlags, evtFlags...)
 
-			// Currently, an event can only be used once in the policy. Support for using the same
-			// event, multiple times, with different filters, shall be implemented in the future.
-			if _, ok := evts[r.Event]; ok {
-				return nil, errfmt.Errorf("policy %s, event %s is duplicated", p.Name, r.Event)
-			}
-
-			evts[r.Event] = true
-
-			filterFlags = append(filterFlags, &filterFlag{
-				full:              fmt.Sprintf("event=%s", r.Event),
-				filterName:        "event",
-				operatorAndValues: fmt.Sprintf("=%s", r.Event),
-				policyIdx:         pIdx,
-				policyName:        p.Name,
-			})
-
-			for _, f := range r.Filter {
-				operatorIdx := strings.IndexAny(f, "=!<>")
-
-				if operatorIdx == -1 {
-					return nil, errfmt.Errorf("invalid filter operator: %s", f)
-				}
-
-				filterName := f[:operatorIdx]
-				operatorAndValues := f[operatorIdx:]
-
-				// args
-				if strings.HasPrefix(f, "args.") {
-					filterFlags = append(filterFlags, &filterFlag{
-						full:              fmt.Sprintf("%s.%s", r.Event, f),
-						filterName:        fmt.Sprintf("%s.%s", r.Event, filterName),
-						operatorAndValues: operatorAndValues,
-						policyIdx:         pIdx,
-						policyName:        p.Name,
-					})
+			for _, f := range r.Filters {
+				// event argument or return value filter
+				if strings.HasPrefix(f, "args.") || strings.HasPrefix(f, "retval") {
+					evtFilterFlags, err := parseEventFlag(fmt.Sprintf("%s.%s", r.Event, f))
+					if err != nil {
+						return nil, nil, errfmt.WrapError(err)
+					}
+					eventFlags = append(eventFlags, evtFilterFlags...)
 
 					continue
 				}
 
-				// retval
-				if strings.HasPrefix(f, "retval") {
-					filterFlags = append(filterFlags, &filterFlag{
-						full:              fmt.Sprintf("%s.%s", r.Event, f),
-						filterName:        fmt.Sprintf("%s.%s", r.Event, filterName),
-						operatorAndValues: operatorAndValues,
-						policyIdx:         pIdx,
-						policyName:        p.Name,
-					})
-					continue
+				// at this point we know the filter is an event context filter
+				// context filters are provided without "context." prefix so we need to add it
+				evtContextFlags, err := parseEventFlag(fmt.Sprintf("%s.context.%s", r.Event, f))
+				if err != nil {
+					return nil, nil, errfmt.WrapError(err)
 				}
+				eventFlags = append(eventFlags, evtContextFlags...)
+			}
+		}
 
-				err = validateContext(p.Name, filterName)
+		policyEventsMap[pIdx] = policyEvents{
+			policyName: p.Name(),
+			eventFlags: eventFlags,
+		}
+	}
+
+	return policyScopeMap, policyEventsMap, nil
+}
+
+// CreatePolicies creates a Policies object from the scope and events maps.
+func CreatePolicies(policyScopeMap PolicyScopeMap, policyEventsMap PolicyEventMap, newBinary bool) (*policy.Policies, error) {
+	eventsNameToID := events.Core.NamesToIDs()
+	// remove internal events since they shouldn't be accessible by users
+	for event, id := range eventsNameToID {
+		if events.Core.GetDefinitionByID(id).IsInternal() {
+			delete(eventsNameToID, event)
+		}
+	}
+
+	policies := policy.NewPolicies()
+	for policyIdx, policyScopeFilters := range policyScopeMap {
+		p := policy.NewPolicy()
+		p.ID = policyIdx
+		p.Name = policyScopeFilters.policyName
+
+		for _, scopeFlag := range policyScopeFilters.scopeFlags {
+			// The filters which are more common (container, event, pid, set, uid) can be given using a prefix of them.
+			// Other filters should be given using their full name.
+			// To avoid collisions between filters that share the same prefix, put the filters which should have an exact match first!
+			if scopeFlag.scopeName == "comm" {
+				err := p.CommFilter.Parse(scopeFlag.operatorAndValues)
 				if err != nil {
 					return nil, err
 				}
-
-				// context
-				filterFlags = append(filterFlags, &filterFlag{
-					full:              fmt.Sprintf("%s.context.%s", r.Event, f),
-					filterName:        fmt.Sprintf("%s.context.%s", r.Event, filterName),
-					operatorAndValues: operatorAndValues,
-					policyIdx:         pIdx,
-					policyName:        p.Name,
-				})
+				continue
 			}
+
+			if scopeFlag.scopeName == "exec" || scopeFlag.scopeName == "executable" ||
+				scopeFlag.scopeName == "bin" || scopeFlag.scopeName == "binary" {
+				// TODO: Rename BinaryFilter to ExecutableFilter
+				err := p.BinaryFilter.Parse(scopeFlag.operatorAndValues)
+				if err != nil {
+					return nil, err
+				}
+				continue
+			}
+
+			if scopeFlag.scopeName == "container" {
+				if scopeFlag.operator == "not" {
+					err := p.ContFilter.Parse(scopeFlag.full)
+					if err != nil {
+						return nil, err
+					}
+					continue
+				}
+				if scopeFlag.operatorAndValues == "=new" {
+					err := p.NewContFilter.Parse("new")
+					if err != nil {
+						return nil, err
+					}
+					continue
+				}
+				if scopeFlag.operatorAndValues == "!=new" {
+					err := p.ContFilter.Parse(scopeFlag.scopeName)
+					if err != nil {
+						return nil, err
+					}
+					err = p.NewContFilter.Parse("!new")
+					if err != nil {
+						return nil, err
+					}
+					continue
+				}
+				if scopeFlag.operator == "=" {
+					err := p.ContIDFilter.Parse(scopeFlag.operatorAndValues)
+					if err != nil {
+						return nil, err
+					}
+					continue
+				}
+
+				err := p.ContFilter.Parse(scopeFlag.scopeName)
+				if err != nil {
+					return nil, err
+				}
+				continue
+			}
+
+			if scopeFlag.scopeName == "mntns" {
+				if strings.ContainsAny(scopeFlag.operator, "<>") {
+					return nil, filters.InvalidExpression(scopeFlag.operatorAndValues)
+				}
+				err := p.MntNSFilter.Parse(scopeFlag.operatorAndValues)
+				if err != nil {
+					return nil, err
+				}
+				continue
+			}
+
+			if scopeFlag.scopeName == "pidns" {
+				if strings.ContainsAny(scopeFlag.operator, "<>") {
+					return nil, filters.InvalidExpression(scopeFlag.operatorAndValues)
+				}
+				err := p.PidNSFilter.Parse(scopeFlag.operatorAndValues)
+				if err != nil {
+					return nil, err
+				}
+				continue
+			}
+
+			if scopeFlag.scopeName == "tree" {
+				err := p.ProcessTreeFilter.Parse(scopeFlag.operatorAndValues)
+				if err != nil {
+					return nil, err
+				}
+				continue
+			}
+
+			if scopeFlag.scopeName == "pid" {
+				if scopeFlag.operatorAndValues == "=new" {
+					if err := p.NewPidFilter.Parse("new"); err != nil {
+						return nil, err
+					}
+					continue
+				}
+				if scopeFlag.operatorAndValues == "!=new" {
+					if err := p.NewPidFilter.Parse("!new"); err != nil {
+						return nil, err
+					}
+					continue
+				}
+				err := p.PIDFilter.Parse(scopeFlag.operatorAndValues)
+				if err != nil {
+					return nil, err
+				}
+				continue
+			}
+
+			if scopeFlag.scopeName == "uts" {
+				err := p.UTSFilter.Parse(scopeFlag.operatorAndValues)
+				if err != nil {
+					return nil, err
+				}
+				continue
+			}
+
+			if scopeFlag.scopeName == "uid" {
+				err := p.UIDFilter.Parse(scopeFlag.operatorAndValues)
+				if err != nil {
+					return nil, err
+				}
+				continue
+			}
+
+			if scopeFlag.scopeName == "follow" {
+				p.Follow = true
+				continue
+			}
+
+			return nil, InvalidScopeOptionError(scopeFlag.full, newBinary)
 		}
 
-		filterMap[pIdx] = filterFlags
-	}
+		eventFilter := eventFilter{
+			Equal:    []string{},
+			NotEqual: []string{},
+		}
 
-	return filterMap, nil
-}
+		policyEvents, ok := policyEventsMap[policyIdx]
+		if !ok {
+			return nil, InvalidFlagEmpty()
+		}
 
-func validatePolicy(p PolicyFile) error {
-	if p.Name == "" {
-		return errfmt.Errorf("policy name cannot be empty")
-	}
+		for _, evtFlag := range policyEvents.eventFlags {
+			if evtFlag.eventOptionType == "" {
+				// no event option type means that the flag contains only event names
+				if evtFlag.operator == "-" {
+					eventFilter.NotEqual = append(eventFilter.NotEqual, evtFlag.eventName)
+				} else {
+					eventFilter.Equal = append(eventFilter.Equal, evtFlag.eventName)
+				}
+				continue
+			}
 
-	if p.Description == "" {
-		return errfmt.Errorf("policy %s, description cannot be empty", p.Name)
-	}
+			// at this point, we can assume that event flag is an event option filter (args, retval, context),
+			// so, as a sugar, we can add the event name to be filtered
+			eventFilter.Equal = append(eventFilter.Equal, evtFlag.eventName)
 
-	if p.Scope == nil || len(p.Scope) == 0 {
-		return errfmt.Errorf("policy %s, scope cannot be empty", p.Name)
-	}
+			evtFilter := evtFlag.eventFilter
+			operatorAndValues := evtFlag.operatorAndValues
 
-	if p.Rules == nil || len(p.Rules) == 0 {
-		return errfmt.Errorf("policy %s, rules cannot be empty", p.Name)
-	}
+			if evtFlag.eventOptionType == "retval" {
+				err := p.RetFilter.Parse(evtFilter, operatorAndValues, eventsNameToID)
+				if err != nil {
+					return nil, err
+				}
+				continue
+			}
 
-	if p.DefaultAction == "" {
-		return errfmt.Errorf("policy %s, default action cannot be empty", p.Name)
-	}
+			if evtFlag.eventOptionType == "context" {
+				err := p.ContextFilter.Parse(evtFilter, operatorAndValues)
+				if err != nil {
+					return nil, err
+				}
+				continue
+			}
 
-	return nil
-}
+			if evtFlag.eventOptionType == "args" {
+				err := p.ArgFilter.Parse(evtFilter, operatorAndValues, eventsNameToID)
+				if err != nil {
+					return nil, err
+				}
+				continue
+			}
 
-func validateAction(policyName, a string) error {
-	actions := []string{
-		"log",
-	}
+			return nil, InvalidFilterFlagFormat(evtFlag.full)
+		}
 
-	for _, action := range actions {
-		if a == action {
-			return nil
+		var err error
+		p.EventsToTrace, err = prepareEventsToTrace(eventFilter, eventsNameToID)
+		if err != nil {
+			return nil, err
+		}
+
+		err = policies.Set(p)
+		if err != nil {
+			logger.Warnw("Setting policy", "error", err)
 		}
 	}
 
-	return errfmt.Errorf("policy %s, action %s is not valid", policyName, a)
-}
-
-func validateScope(policyName, s string) error {
-	scopes := []string{
-		"uid",
-		"pid",
-		"mntns",
-		"pidns",
-		"uts",
-		"comm",
-		"container",
-		"!container",
-		"tree",
-		"binary",
-		"bin",
-		"follow",
-	}
-
-	for _, scope := range scopes {
-		if s == scope {
-			return nil
-		}
-	}
-
-	return errfmt.Errorf("policy %s, scope %s is not valid", policyName, s)
-}
-
-func validateEvent(policyName, eventName string) error {
-	if eventName == "" {
-		return errfmt.Errorf("policy %s, event cannot be empty", policyName)
-	}
-
-	_, ok := events.Definitions.GetID(eventName)
-	if !ok {
-		return errfmt.Errorf("policy %s, event %s is not valid", policyName, eventName)
-	}
-	return nil
-}
-
-func validateContext(policyName, c string) error {
-	contexts := []string{
-		"timestamp",
-		"processorId",
-		"p",
-		"pid",
-		"processId",
-		"tid",
-		"threadId",
-		"ppid",
-		"parentProcessId",
-		"hostTid",
-		"hostThreadId",
-		"hostPid",
-		"hostParentProcessId",
-		"uid",
-		"userId",
-		"mntns",
-		"mountNamespace",
-		"pidns",
-		"pidNamespace",
-		"processName",
-		"comm",
-		"hostName",
-		"cgroupId",
-		"host",
-		"container",
-		"containerId",
-		"containerImage",
-		"containerName",
-		"podName",
-		"podNamespace",
-		"podUid",
-		"syscall",
-	}
-
-	for _, context := range contexts {
-		if c == context {
-			return nil
-		}
-	}
-
-	return errfmt.Errorf("policy %s, filter %s is not valid", policyName, c)
+	return policies, nil
 }

@@ -61,20 +61,20 @@ func ParseArgs(event *trace.Event) error {
 	case SysEnter, SysExit:
 		if syscallArg := GetArg(event, "syscall"); syscallArg != nil {
 			if id, isInt32 := syscallArg.Value.(int32); isInt32 {
-				if event, isKnown := Definitions.GetSafe(ID(id)); isKnown {
-					if event.Syscall {
-						syscallArg.Value = event.Name
+				if Core.IsDefined(ID(id)) {
+					eventDefinition := Core.GetDefinitionByID(ID(id))
+					if eventDefinition.IsSyscall() {
+						syscallArg.Value = eventDefinition.GetName()
 						syscallArg.Type = "string"
 					}
 				}
 			}
 		}
-		if ID(event.EventID) == CapCapable {
-			if capArg := GetArg(event, "cap"); capArg != nil {
-				if capability, isInt32 := capArg.Value.(int32); isInt32 {
-					capabilityFlagArgument, err := helpers.ParseCapability(uint64(capability))
-					parseOrEmptyString(capArg, capabilityFlagArgument, err)
-				}
+	case CapCapable:
+		if capArg := GetArg(event, "cap"); capArg != nil {
+			if capability, isInt32 := capArg.Value.(int32); isInt32 {
+				capabilityFlagArgument, err := helpers.ParseCapability(uint64(capability))
+				parseOrEmptyString(capArg, capabilityFlagArgument, err)
 			}
 		}
 	case SecurityMmapFile, DoMmap:
@@ -250,12 +250,12 @@ func ParseArgs(event *trace.Event) error {
 				helpersArg.Value = parsedHelpersList
 			}
 		}
-		if perfTypeArg := GetArg(event, "perf_type"); perfTypeArg != nil {
-			if perfType, isInt := perfTypeArg.Value.(int32); isInt {
-				perfTypestr, err := parseBpfAttachPerfType(perfType)
-				emptyString(perfTypeArg)
+		if attachTypeArg := GetArg(event, "attach_type"); attachTypeArg != nil {
+			if attachType, isInt := attachTypeArg.Value.(int32); isInt {
+				attachTypestr, err := parseBpfAttachType(attachType)
+				emptyString(attachTypeArg)
 				if err == nil {
-					perfTypeArg.Value = perfTypestr
+					attachTypeArg.Value = attachTypestr
 				}
 			}
 		}
@@ -340,19 +340,21 @@ func parseBpfHelpersUsage(helpersList []uint64) ([]string, error) {
 	return usedHelpers, nil
 }
 
-func parseBpfAttachPerfType(perfType int32) (string, error) {
-	switch perfType {
+func parseBpfAttachType(attachType int32) (string, error) {
+	switch attachType {
 	case 0:
-		return "tracepoint", nil
+		return "raw_tracepoint", nil
 	case 1:
-		return "kprobe", nil
+		return "tracepoint", nil
 	case 2:
-		return "kretprobe", nil
+		return "kprobe", nil
 	case 3:
-		return "uprobe", nil
+		return "kretprobe", nil
 	case 4:
+		return "uprobe", nil
+	case 5:
 		return "uretprobe", nil
 	default:
-		return "", errfmt.Errorf("unknown perf_type got from bpf_attach event")
+		return "", errfmt.Errorf("unknown attach_type got from bpf_attach event")
 	}
 }

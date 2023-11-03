@@ -7,25 +7,37 @@
 
 #include <common/common.h>
 
-static __always_inline bool is_x86_compat(struct task_struct *task)
+// PROTOTYPES
+
+statfunc bool is_x86_compat(struct task_struct *);
+statfunc bool is_arm64_compat(struct task_struct *);
+statfunc bool is_compat(struct task_struct *);
+statfunc int get_syscall_id_from_regs(struct pt_regs *);
+statfunc struct pt_regs *get_task_pt_regs(struct task_struct *);
+statfunc bool has_syscall_fd_arg(uint);
+statfunc uint get_syscall_fd_num_from_arg(uint syscall_id, args_t *);
+
+// FUNCTIONS
+
+statfunc bool is_x86_compat(struct task_struct *task)
 {
 #if defined(bpf_target_x86)
-    return READ_KERN(task->thread_info.status) & TS_COMPAT;
+    return BPF_CORE_READ(task, thread_info.status) & TS_COMPAT;
 #else
     return false;
 #endif
 }
 
-static __always_inline bool is_arm64_compat(struct task_struct *task)
+statfunc bool is_arm64_compat(struct task_struct *task)
 {
 #if defined(bpf_target_arm64)
-    return READ_KERN(task->thread_info.flags) & _TIF_32BIT;
+    return BPF_CORE_READ(task, thread_info.flags) & _TIF_32BIT;
 #else
     return false;
 #endif
 }
 
-static __always_inline bool is_compat(struct task_struct *task)
+statfunc bool is_compat(struct task_struct *task)
 {
 #if defined(bpf_target_x86)
     return is_x86_compat(task);
@@ -36,24 +48,24 @@ static __always_inline bool is_compat(struct task_struct *task)
 #endif
 }
 
-static __always_inline int get_syscall_id_from_regs(struct pt_regs *regs)
+statfunc int get_syscall_id_from_regs(struct pt_regs *regs)
 {
 #if defined(bpf_target_x86)
-    int id = READ_KERN(regs->orig_ax);
+    int id = BPF_CORE_READ(regs, orig_ax);
 #elif defined(bpf_target_arm64)
-    int id = READ_KERN(regs->syscallno);
+    int id = BPF_CORE_READ(regs, syscallno);
 #endif
     return id;
 }
 
-static __always_inline struct pt_regs *get_task_pt_regs(struct task_struct *task)
+statfunc struct pt_regs *get_task_pt_regs(struct task_struct *task)
 {
 // THREAD_SIZE here is statistically defined and assumed to work for 4k page sizes.
 #if defined(bpf_target_x86)
-    void *__ptr = READ_KERN(task->stack) + THREAD_SIZE - TOP_OF_KERNEL_STACK_PADDING;
+    void *__ptr = BPF_CORE_READ(task, stack) + THREAD_SIZE - TOP_OF_KERNEL_STACK_PADDING;
     return ((struct pt_regs *) __ptr) - 1;
 #elif defined(bpf_target_arm64)
-    return ((struct pt_regs *) (THREAD_SIZE + READ_KERN(task->stack)) - 1);
+    return ((struct pt_regs *) (THREAD_SIZE + BPF_CORE_READ(task, stack)) - 1);
 #endif
 }
 
@@ -279,15 +291,7 @@ static __always_inline struct pt_regs *get_task_pt_regs(struct task_struct *task
     #define SYSCALL_PROCESS_MRELEASE       448
 #endif
 
-#if defined(bpf_target_x86)
-    #define NUMBER_OF_SYSCALLS_TO_CHECK 18
-#elif defined(bpf_target_arm64)
-    #define NUMBER_OF_SYSCALLS_TO_CHECK 14
-#else
-    #define NUMBER_OF_SYSCALLS_TO_CHECK 0
-#endif
-
-static __always_inline bool has_syscall_fd_arg(uint syscall_id)
+statfunc bool has_syscall_fd_arg(uint syscall_id)
 {
     // Only syscalls with one fd argument so far
     switch (syscall_id) {
@@ -395,7 +399,7 @@ static __always_inline bool has_syscall_fd_arg(uint syscall_id)
     return false;
 }
 
-static __always_inline uint get_syscall_fd_num_from_arg(uint syscall_id, args_t *args)
+statfunc uint get_syscall_fd_num_from_arg(uint syscall_id, args_t *args)
 {
     switch (syscall_id) {
         case SYSCALL_SYMLINKAT:

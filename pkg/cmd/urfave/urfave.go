@@ -10,26 +10,25 @@ import (
 	"github.com/aquasecurity/tracee/pkg/cmd/flags/server"
 	"github.com/aquasecurity/tracee/pkg/cmd/initialize"
 	"github.com/aquasecurity/tracee/pkg/cmd/printer"
-	tracee "github.com/aquasecurity/tracee/pkg/ebpf"
+	"github.com/aquasecurity/tracee/pkg/config"
 	"github.com/aquasecurity/tracee/pkg/errfmt"
 	"github.com/aquasecurity/tracee/pkg/logger"
-	"github.com/aquasecurity/tracee/types/trace"
 )
 
 func GetTraceeRunner(c *cli.Context, version string) (cmd.Runner, error) {
 	var runner cmd.Runner
 
 	// Initialize a tracee config structure
-	cfg := tracee.Config{
+	cfg := config.Config{
 		PerfBufferSize:     c.Int("perf-buffer-size"),
 		BlobPerfBufferSize: c.Int("blob-perf-buffer-size"),
-		ContainersEnrich:   c.Bool("containers"),
+		NoContainersEnrich: c.Bool("no-containers"),
 	}
 
 	// Output command line flags
 
 	var err error
-	var output flags.OutputConfig
+	var output flags.PrepareOutputResult
 
 	output, err = flags.TraceeEbpfPrepareOutput(c.StringSlice("output"), false)
 
@@ -64,11 +63,13 @@ func GetTraceeRunner(c *cli.Context, version string) (cmd.Runner, error) {
 
 	// Container Runtime command line flags
 
-	sockets, err := flags.PrepareContainers(c.StringSlice("crs"))
-	if err != nil {
-		return runner, err
+	if !cfg.NoContainersEnrich {
+		sockets, err := flags.PrepareContainers(c.StringSlice("cri"))
+		if err != nil {
+			return runner, err
+		}
+		cfg.Sockets = sockets
 	}
-	cfg.Sockets = sockets
 
 	// Cache command line flags
 
@@ -80,6 +81,14 @@ func GetTraceeRunner(c *cli.Context, version string) (cmd.Runner, error) {
 	if cfg.Cache != nil {
 		logger.Debugw("Cache", "type", cfg.Cache.String())
 	}
+
+	// Cache command line flags
+
+	procTree, err := flags.PrepareProcTree(c.StringSlice("proctree"))
+	if err != nil {
+		return runner, err
+	}
+	cfg.ProcTree = procTree
 
 	// Capture command line flags
 
@@ -99,27 +108,27 @@ func GetTraceeRunner(c *cli.Context, version string) (cmd.Runner, error) {
 
 	// Filter command line flags
 
-	var filterMap flags.FilterMap
+	var policyScopeMap flags.PolicyScopeMap
+	var policyEventsMap flags.PolicyEventMap
 
-	filterMap, err = flags.PrepareFilterMapFromFlags(c.StringSlice("filter"))
+	policyScopeMap, err = flags.PrepareScopeMapFromFlags(c.StringSlice("scope"))
 	if err != nil {
 		return runner, err
 	}
 
-	policies, err := flags.CreatePolicies(filterMap, false)
+	policyEventsMap, err = flags.PrepareEventMapFromFlags(c.StringSlice("events"))
+	if err != nil {
+		return runner, err
+	}
+
+	policies, err := flags.CreatePolicies(policyScopeMap, policyEventsMap, false)
 	if err != nil {
 		return runner, err
 	}
 
 	cfg.Policies = policies
 
-	// Container information printer flag
-	containerMode := cmd.GetContainerMode(cfg)
-	for _, pConfig := range output.PrinterConfigs {
-		pConfig.ContainerMode = containerMode
-	}
-
-	broadcast, err := printer.NewBroadcast(output.PrinterConfigs)
+	broadcast, err := printer.NewBroadcast(output.PrinterConfigs, cmd.GetContainerMode(cfg))
 	if err != nil {
 		return runner, err
 	}
@@ -161,10 +170,8 @@ func GetTraceeRunner(c *cli.Context, version string) (cmd.Runner, error) {
 		return runner, errfmt.Errorf("failed preparing BPF object: %v", err)
 	}
 
-	cfg.ChanEvents = make(chan trace.Event, 1000)
-
-	httpServer, err := server.PrepareServer(
-		c.String(server.ListenEndpointFlag),
+	httpServer, err := server.PrepareHTTPServer(
+		c.String(server.HTTPListenEndpointFlag),
 		c.Bool(server.MetricsEndpointFlag),
 		c.Bool(server.HealthzEndpointFlag),
 		c.Bool(server.PProfEndpointFlag),
@@ -175,7 +182,7 @@ func GetTraceeRunner(c *cli.Context, version string) (cmd.Runner, error) {
 		return runner, err
 	}
 
-	runner.Server = httpServer
+	runner.HTTPServer = httpServer
 	runner.TraceeConfig = cfg
 	runner.Printer = broadcast
 

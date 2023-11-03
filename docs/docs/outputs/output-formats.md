@@ -1,6 +1,7 @@
 # Tracing Output Formats
 
-The `--output` flag controls where and how Tracee will output events, by specifying `--output <format>:<destination>`.  You can use the `--output` flag multiple times to output events in multiple ways. To see all output options you can run `tracee --help output`.
+<!-- TODO: build man page -->
+The `--output` flag controls where and how Tracee will output events, by specifying `--output <format>:<destination>`.  You can use the `--output` flag multiple times to output events in multiple ways.<!-- To see all output options you can run `man tracee-output`. -->
 
 The following output formats are supported:
 
@@ -18,7 +19,7 @@ The following output formats are supported:
 ### Table
 
 ```console
-sudo ./dist/tracee --output table --filter comm=bash --filter follow --filter event=openat
+sudo ./dist/tracee --output table --scope comm=bash --scope follow --events openat
 ```
 
 ```text
@@ -34,7 +35,7 @@ Stats: {EventCount:3 EventsFiltered:0 NetCapCount:0 BPFLogsCount:0 ErrorCount:0 
 ### Table (Verbose)
 
     ```console
-    sudo ./dist/tracee --output table-verbose --filter comm=bash --filter follow --filter event=openat
+    sudo ./dist/tracee --output table-verbose --scope comm=bash --scope follow --events openat
     ```
 
     ```text
@@ -50,7 +51,7 @@ Stats: {EventCount:3 EventsFiltered:0 NetCapCount:0 BPFLogsCount:0 ErrorCount:0 
 ### JSON
 
 ```console
-sudo ./dist/tracee --output json --filter comm=bash --filter follow --filter event=openat
+sudo ./dist/tracee --output json --scope comm=bash --scope follow --events openat
 ```
 
 ```json
@@ -70,7 +71,7 @@ sudo ./dist/tracee --output json --filter comm=bash --filter follow --filter eve
 ### GOB
 
 ```console
-sudo ./dist/tracee --output json --filter comm=bash --filter follow --filter event=openat
+sudo ./dist/tracee --output json --scope comm=bash --scope follow --events openat
 ```
 
 ### GOTEMPLATE

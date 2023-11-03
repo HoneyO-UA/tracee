@@ -5,29 +5,39 @@
 
 #include <common/common.h>
 
-static __always_inline const char *get_binprm_filename(struct linux_binprm *bprm)
+// PROTOTYPES
+
+statfunc const char *get_binprm_filename(struct linux_binprm *);
+statfunc const char *get_binprm_interp(struct linux_binprm *);
+statfunc struct file *get_file_ptr_from_bprm(struct linux_binprm *);
+statfunc int get_argc_from_bprm(struct linux_binprm *);
+statfunc int get_envc_from_bprm(struct linux_binprm *);
+
+// FUNCTIONS
+
+statfunc const char *get_binprm_filename(struct linux_binprm *bprm)
 {
-    return READ_KERN(bprm->filename);
+    return BPF_CORE_READ(bprm, filename);
 }
 
-static __always_inline const char *get_binprm_interp(struct linux_binprm *bprm)
+statfunc const char *get_binprm_interp(struct linux_binprm *bprm)
 {
-    return READ_KERN(bprm->interp);
+    return BPF_CORE_READ(bprm, interp);
 }
 
-static __always_inline struct file *get_file_ptr_from_bprm(struct linux_binprm *bprm)
+statfunc struct file *get_file_ptr_from_bprm(struct linux_binprm *bprm)
 {
-    return READ_KERN(bprm->file);
+    return BPF_CORE_READ(bprm, file);
 }
 
-static __always_inline int get_argc_from_bprm(struct linux_binprm *bprm)
+statfunc int get_argc_from_bprm(struct linux_binprm *bprm)
 {
-    return READ_KERN(bprm->argc);
+    return BPF_CORE_READ(bprm, argc);
 }
 
-static __always_inline int get_envc_from_bprm(struct linux_binprm *bprm)
+statfunc int get_envc_from_bprm(struct linux_binprm *bprm)
 {
-    return READ_KERN(bprm->envc);
+    return BPF_CORE_READ(bprm, envc);
 }
 
 #endif

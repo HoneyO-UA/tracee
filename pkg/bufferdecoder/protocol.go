@@ -13,6 +13,7 @@ const (
 	SendMprotect
 	SendKernelModule
 	SendBpfObject
+	SendVfsRead
 )
 
 // PLEASE NOTE, YOU MUST UPDATE THE DECODER IF ANY CHANGE TO THIS STRUCT IS DONE.
@@ -37,18 +38,19 @@ type Context struct {
 	Comm            [16]byte
 	UtsName         [16]byte
 	Flags           uint32
+	LeaderStartTime uint64
+	ParentStartTime uint64
 	EventID         events.ID // int32
 	Syscall         int32
 	MatchedPolicies uint64
 	Retval          int64
 	StackID         uint32
 	ProcessorId     uint16
-	Argnum          uint8
-	_               [1]byte // padding
+	_               [2]byte // padding
 }
 
-func (Context) GetSizeBytes() uint32 {
-	return 128
+func (Context) GetSizeBytes() int {
+	return 144
 }
 
 type ChunkMeta struct {
@@ -63,14 +65,14 @@ func (ChunkMeta) GetSizeBytes() uint32 {
 	return 49
 }
 
-type VfsWriteMeta struct {
+type VfsFileMeta struct {
 	DevID uint32
 	Inode uint64
 	Mode  uint32
 	Pid   uint32
 }
 
-func (VfsWriteMeta) GetSizeBytes() uint32 {
+func (VfsFileMeta) GetSizeBytes() uint32 {
 	return 20
 }
 

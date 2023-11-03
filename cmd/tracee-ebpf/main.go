@@ -31,10 +31,10 @@ func main() {
 			// Logger Setup
 			logger.Init(logger.NewDefaultLoggingConfig())
 
-			flags.PrintAndExitIfHelp(c, false)
+			flags.PrintAndExitIfHelp(c)
 
 			if c.Bool("list") {
-				cmd.PrintEventList(false) // list events
+				cmd.PrintEventList(false, false) // list events
 				return nil
 			}
 			initialize.SetLibbpfgoCallbacks()
@@ -57,10 +57,15 @@ func main() {
 				Usage:   "list traceable events",
 			},
 			&cli.StringSliceFlag{
-				Name:    "filter",
-				Aliases: []string{"f"},
+				Name:    "scope",
+				Aliases: []string{"s"},
 				Value:   nil,
-				Usage:   "select events to trace by defining filter expressions. run '--filter help' for more info.",
+				Usage:   "select workloads to trace by defining filter expressions. run '--scope help' for more info.",
+			},
+			&cli.StringSliceFlag{
+				Name:    "events",
+				Aliases: []string{"e"},
+				Usage:   "select events to trace and filter events. run '--events help' for more info.",
 			},
 			&cli.StringSliceFlag{
 				Name:    "capture",
@@ -87,8 +92,14 @@ func main() {
 				Usage:   "control event caching queues. run '--cache help' for more info.",
 			},
 			&cli.StringSliceFlag{
-				Name:  "crs",
-				Usage: "define connected container runtimes. run '--crs help' for more info.",
+				Name:    "proctree",
+				Aliases: []string{"t"},
+				Value:   cli.NewStringSlice("none"),
+				Usage:   "process tree options. run '--proctree help' for more info.",
+			},
+			&cli.StringSliceFlag{
+				Name:  "cri",
+				Usage: "define connected container runtimes. run '--cri help' for more info.",
 				Value: cli.NewStringSlice(),
 			},
 			&cli.IntFlag{
@@ -128,13 +139,13 @@ func main() {
 				Value: false,
 			},
 			&cli.StringFlag{
-				Name:  server.ListenEndpointFlag,
+				Name:  server.HTTPListenEndpointFlag,
 				Usage: "listening address of the metrics endpoint server",
 				Value: ":3366",
 			},
 			&cli.BoolFlag{
-				Name:  "containers",
-				Usage: "enable container info enrichment to events. this feature is experimental and may cause unexpected behavior in the pipeline",
+				Name:  "no-containers",
+				Usage: "disable container info enrichment to events. safeguard option.",
 			},
 			&cli.StringSliceFlag{
 				Name:  "log",

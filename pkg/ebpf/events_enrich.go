@@ -44,7 +44,15 @@ import (
 // is enriched and its enqueued events are de-queued.
 //
 
-func (t *Tracee) enrichContainerEvents(ctx gocontext.Context, in <-chan *trace.Event) (chan *trace.Event, chan error) {
+// enrichContainerEvents is a pipeline stage that enriches container events with metadata.
+func (t *Tracee) enrichContainerEvents(ctx gocontext.Context, in <-chan *trace.Event,
+) (
+	chan *trace.Event, chan error,
+) {
+	// Events may be enriched in the initial decode state, if the enrichment data has been
+	// stored in the Containers structure. In that case, this pipeline stage will be
+	// quickly skipped. The enrichment happens in a different stage to ensure that the
+	// pipeline is not blocked by the container runtime calls.
 	const (
 		contQueueSize  = 10000  // max num of events queued per container
 		queueReadySize = 100000 // max num of events queued in total
@@ -76,6 +84,9 @@ func (t *Tracee) enrichContainerEvents(ctx gocontext.Context, in <-chan *trace.E
 		for { // enqueue events
 			select {
 			case event := <-in:
+				if event == nil {
+					continue // might happen during initialization (ctrl+c seg faults)
+				}
 				eventID := events.ID(event.EventID)
 				// send out irrelevant events (non container or already enriched), don't skip the cgroup lifecycle events
 				if (event.Container.ID == "" || event.Container.Name != "") && eventID != events.CgroupMkdir && eventID != events.CgroupRmdir {
@@ -85,7 +96,7 @@ func (t *Tracee) enrichContainerEvents(ctx gocontext.Context, in <-chan *trace.E
 				cgroupId := uint64(event.CgroupID)
 				// CgroupMkdir: pick EventID from the event itself
 				if eventID == events.CgroupMkdir {
-					cgroupId, _ = parse.ArgVal[uint64](event, "cgroup_id")
+					cgroupId, _ = parse.ArgVal[uint64](event.Args, "cgroup_id")
 				}
 				// CgroupRmdir: clean up remaining events and maps
 				if eventID == events.CgroupRmdir {
@@ -130,6 +141,9 @@ func (t *Tracee) enrichContainerEvents(ctx gocontext.Context, in <-chan *trace.E
 					// de-queue event if queue is enriched
 					if _, ok := queues[cgroupId]; ok {
 						event := <-queues[cgroupId]
+						if event == nil {
+							continue // might happen during initialization (ctrl+c seg faults)
+						}
 						eventID := events.ID(event.EventID)
 						// check if not enriched, and only enrich regular non cgroup related events
 						if event.Container.Name == "" && eventID != events.CgroupMkdir && eventID != events.CgroupRmdir {
@@ -156,7 +170,7 @@ func (t *Tracee) enrichContainerEvents(ctx gocontext.Context, in <-chan *trace.E
 			select {
 			case event := <-queueClean:
 				bLock.Lock()
-				cgroupId, _ := parse.ArgVal[uint64](event, "cgroup_id")
+				cgroupId, _ := parse.ArgVal[uint64](event.Args, "cgroup_id")
 				if queue, ok := queues[cgroupId]; ok {
 					// if queue is still full reschedule cleanup
 					if len(queue) > 0 {
@@ -183,6 +197,7 @@ func (t *Tracee) enrichContainerEvents(ctx gocontext.Context, in <-chan *trace.E
 
 func enrichEvent(evt *trace.Event, enrichData runtime.ContainerMetadata) {
 	evt.Container = trace.Container{
+		ID:          enrichData.ContainerId,
 		ImageName:   enrichData.Image,
 		ImageDigest: enrichData.ImageDigest,
 		Name:        enrichData.Name,

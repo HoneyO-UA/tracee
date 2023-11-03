@@ -56,6 +56,32 @@ affinity: {}
 
 webhook: ""
 
+defaultPolicy: {}
+
+traceeConfig: {}
+
+config:
+  blobPerfBufferSize: ""
+  perfBufferSize: 1024
+  healthz: true
+  metrics: true
+  pprof: false
+  pyroscope: false
+  listenAddr: :3366
+  installPath: ""
+  signaturesDir: ""
+  capabilities: []
+  cri: []
+  rego: []
+  cache:
+    - cache-type=mem
+    - mem-cache-size=512
+  log:
+    - info
+  output:
+    - json
+    - option:parse-arguments
+
 signatures:
   # config defines Common Expression Language (CEL) signatures that are loaded
   # by Tracee-Rules from the --rules-dir directory. If the config object is not

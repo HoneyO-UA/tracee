@@ -8,63 +8,18 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/aquasecurity/tracee/pkg/cmd/printer"
-	tracee "github.com/aquasecurity/tracee/pkg/ebpf"
+	"github.com/aquasecurity/tracee/pkg/config"
 	"github.com/aquasecurity/tracee/pkg/errfmt"
 )
 
-func outputHelp() string {
-	return `Control how and where output is printed.
-Format options:
-table[:/path/to/file,...]                          output events in table format (default). The default path to file is stdout.
-table-verbose[:/path/to/file,...]                  output events in table format with extra fields per event. The default path to file is stdout.
-json[:/path/to/file,...]                           output events in json format. The default path to file is stdout.
-gob[:/path/to/file,...]                            output events in gob format. The default path to file is stdout.
-gotemplate=/path/to/template[:/path/to/file,...]   output events formatted using a given gotemplate file. The default path to file is stdout.
-none                                               ignore stream of events output, usually used with --capture
-
-Fluent Forward options:
-forward:url                                        send events in json format using the Forward protocol to a Fluent receiver
-
-Webhook options:
-webhook:url                                        send events in json format to the webhook url
-
-Other options:
-option:{stack-addresses,exec-env,relative-time,exec-hash,parse-arguments,sort-events}
-                                                   augment output according to given options (default: none)
-  stack-addresses                                  include stack memory addresses for each event
-  exec-env                                         when tracing execve/execveat, show the environment variables that were used for execution
-  relative-time                                    use relative timestamp instead of wall timestamp for events
-  exec-hash                                        when tracing sched_process_exec, show the file hash(sha256) and ctime
-  parse-arguments                                  do not show raw machine-readable values for event arguments, instead parse into human readable strings
-  parse-arguments-fds                              enable parse-arguments and enrich fd with its file path translation. This can cause pipeline slowdowns.
-  sort-events                                      enable sorting events before passing to them output. This will decrease the overall program efficiency.
-
-Examples:
-  --output json                                                  | output as json to stdout
-  --output json:/my/out                                          | output as json to /my/out
-  --output gotemplate=/path/to/my.tmpl                           | output as the provided go template to stdout
-  --output gob:/my/out                                           | output gob to /my/out
-  --output json --output gob:/my/out                             | output as json to stdout and as gob to /my/out
-  --output json:/my/out1,/my/out2                                | output as json to both /my/out and /my/out2
-  --output none                                                  | ignore events output
-  --output table --output option:stack-addresses                 | output as table with stack addresses
-  --output forward:tcp://user:pass@127.0.0.1:24224?tag=tracee    | output via the Forward protocol to 127.0.0.1 on port 24224 with the tag 'tracee' using TCP
-  --output webhook:http://webhook:8080                           | output events to the webhook endpoint
-  --output webhook:http://webhook:8080?timeout=5s                | output events to the webhook endpoint with a timeout of 5s
-
-Use this flag multiple times to choose multiple output options
-`
+type PrepareOutputResult struct {
+	TraceeConfig   *config.OutputConfig
+	PrinterConfigs []config.PrinterConfig
 }
 
-type OutputConfig struct {
-	TraceeConfig   *tracee.OutputConfig
-	PrinterConfigs []printer.Config
-}
-
-func PrepareOutput(outputSlice []string, newBinary bool) (OutputConfig, error) {
-	outConfig := OutputConfig{}
-	traceeConfig := &tracee.OutputConfig{}
+func PrepareOutput(outputSlice []string, newBinary bool) (PrepareOutputResult, error) {
+	outConfig := PrepareOutputResult{}
+	traceeConfig := &config.OutputConfig{}
 
 	// outpath:format
 	printerMap := make(map[string]string)
@@ -84,7 +39,9 @@ func PrepareOutput(outputSlice []string, newBinary bool) (OutputConfig, error) {
 		case "none":
 			if len(outputParts) > 1 {
 				if newBinary {
-					return outConfig, errors.New("none output does not support path. Use '--help output' for more info")
+					// TODO: build man page
+					// return outConfig, errors.New("none output does not support path. See 'tracee-output' man page for more info")
+					return outConfig, errors.New("none output does not support path. Use '--help' for more info")
 				}
 
 				return outConfig, errors.New("none output does not support path. Use '--output help' for more info")
@@ -116,7 +73,9 @@ func PrepareOutput(outputSlice []string, newBinary bool) (OutputConfig, error) {
 			}
 		default:
 			if newBinary {
-				return outConfig, fmt.Errorf("invalid output flag: %s, use '--help output' for more info", outputParts[0])
+				// TODO: build man page
+				// return outConfig, fmt.Errorf("invalid output flag: %s, see 'tracee-output' man page for more info", outputParts[0])
+				return outConfig, fmt.Errorf("invalid output flag: %s, use '--help' for more info", outputParts[0])
 			}
 
 			return outConfig, fmt.Errorf("invalid output flag: %s, use '--output help' for more info", outputParts[0])
@@ -140,26 +99,28 @@ func PrepareOutput(outputSlice []string, newBinary bool) (OutputConfig, error) {
 }
 
 // setOption sets the given option in the given config
-func setOption(config *tracee.OutputConfig, option string, newBinary bool) error {
+func setOption(cfg *config.OutputConfig, option string, newBinary bool) error {
 	switch option {
 	case "stack-addresses":
-		config.StackAddresses = true
+		cfg.StackAddresses = true
 	case "exec-env":
-		config.ExecEnv = true
+		cfg.ExecEnv = true
 	case "relative-time":
-		config.RelativeTime = true
+		cfg.RelativeTime = true
 	case "exec-hash":
-		config.ExecHash = true
+		cfg.ExecHash = true
 	case "parse-arguments":
-		config.ParseArguments = true
+		cfg.ParseArguments = true
 	case "parse-arguments-fds":
-		config.ParseArgumentsFDs = true
-		config.ParseArguments = true // no point in parsing file descriptor args only
+		cfg.ParseArgumentsFDs = true
+		cfg.ParseArguments = true // no point in parsing file descriptor args only
 	case "sort-events":
-		config.EventsSorting = true
+		cfg.EventsSorting = true
 	default:
 		if newBinary {
-			return errfmt.Errorf("invalid output option: %s, use '--help output' for more info", option)
+			// TODO: build man page
+			// return errfmt.Errorf("invalid output option: %s, see 'tracee-output' man page for more info", option)
+			return errfmt.Errorf("invalid output option: %s, use '--help' for more info", option)
 		}
 
 		return errfmt.Errorf("invalid output option: %s, use '--output help' for more info", option)
@@ -169,8 +130,8 @@ func setOption(config *tracee.OutputConfig, option string, newBinary bool) error
 }
 
 // getPrinterConfigs returns a slice of printer.Configs based on the given printerMap
-func getPrinterConfigs(printerMap map[string]string, traceeConfig *tracee.OutputConfig, newBinary bool) ([]printer.Config, error) {
-	printerConfigs := make([]printer.Config, 0, len(printerMap))
+func getPrinterConfigs(printerMap map[string]string, traceeConfig *config.OutputConfig, newBinary bool) ([]config.PrinterConfig, error) {
+	printerConfigs := make([]config.PrinterConfig, 0, len(printerMap))
 
 	for outPath, printerKind := range printerMap {
 		if printerKind == "table" {
@@ -189,7 +150,7 @@ func getPrinterConfigs(printerMap map[string]string, traceeConfig *tracee.Output
 			}
 		}
 
-		printerConfigs = append(printerConfigs, printer.Config{
+		printerConfigs = append(printerConfigs, config.PrinterConfig{
 			Kind:       printerKind,
 			OutPath:    outPath,
 			OutFile:    outFile,
@@ -210,7 +171,9 @@ func parseFormat(outputParts []string, printerMap map[string]string, newBinary b
 	for _, outPath := range strings.Split(outputParts[1], ",") {
 		if outPath == "" {
 			if newBinary {
-				return errfmt.Errorf("format flag can't be empty, use '--help output' for more info")
+				// TODO: build man page
+				// return errfmt.Errorf("format flag can't be empty, see 'tracee-output' man page for more info")
+				return errfmt.Errorf("format flag can't be empty, use '--help' for more info")
 			}
 
 			return errfmt.Errorf("format flag can't be empty, use '--output help' for more info")
@@ -218,7 +181,9 @@ func parseFormat(outputParts []string, printerMap map[string]string, newBinary b
 
 		if _, ok := printerMap[outPath]; ok {
 			if newBinary {
-				return errfmt.Errorf("cannot use the same path for multiple outputs: %s, use '--help output' for more info", outPath)
+				// TODO: build man page
+				// return errfmt.Errorf("cannot use the same path for multiple outputs: %s, see 'tracee-output' man page for more info", outPath)
+				return errfmt.Errorf("cannot use the same path for multiple outputs: %s, use '--help' for more info", outPath)
 			}
 
 			return errfmt.Errorf("cannot use the same path for multiple outputs: %s, use '--output help' for more info", outPath)
@@ -230,10 +195,12 @@ func parseFormat(outputParts []string, printerMap map[string]string, newBinary b
 }
 
 // parseOption parses the given option and sets it in the given config
-func parseOption(outputParts []string, traceeConfig *tracee.OutputConfig, newBinary bool) error {
+func parseOption(outputParts []string, traceeConfig *config.OutputConfig, newBinary bool) error {
 	if len(outputParts) == 1 || outputParts[1] == "" {
 		if newBinary {
-			return errfmt.Errorf("option flag can't be empty, use '--help output' for more info")
+			// TODO: build man page
+			// return errfmt.Errorf("option flag can't be empty, see 'tracee-output' man page for more info")
+			return errfmt.Errorf("option flag can't be empty, use '--help' for more info")
 		}
 
 		return errfmt.Errorf("option flag can't be empty, use '--output help' for more info")
@@ -273,7 +240,9 @@ func createFile(path string) (*os.File, error) {
 func validateURL(outputParts []string, flag string, newBinary bool) error {
 	if len(outputParts) == 1 || outputParts[1] == "" {
 		if newBinary {
-			return errfmt.Errorf("%s flag can't be empty, use '--help output' for more info", flag)
+			// TODO: build man page
+			// return errfmt.Errorf("%s flag can't be empty, see 'tracee-output' man page for more info", flag)
+			return errfmt.Errorf("%s flag can't be empty, use '--help' for more info", flag)
 		}
 
 		return errfmt.Errorf("%s flag can't be empty, use '--output help' for more info", flag)
@@ -283,7 +252,9 @@ func validateURL(outputParts []string, flag string, newBinary bool) error {
 
 	if err != nil {
 		if newBinary {
-			return errfmt.Errorf("invalid uri for %s output %q. Use '--help output' for more info", flag, outputParts[1])
+			// TODO: build man page
+			// return errfmt.Errorf("invalid uri for %s output %q. Use 'tracee-output' man page for more info", flag, outputParts[1])
+			return errfmt.Errorf("invalid uri for %s output %q. Use '--help' for more info", flag, outputParts[1])
 		}
 
 		return errfmt.Errorf("invalid uri for %s output %q. Use '--output help' for more info", flag, outputParts[1])

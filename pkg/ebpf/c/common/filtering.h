@@ -4,6 +4,20 @@
 #include <vmlinux.h>
 
 #include <maps.h>
+#include <common/logging.h>
+#include <common/common.h>
+
+// PROTOTYPES
+
+statfunc u64 uint_filter_range_matches(u64, void *, u64, u64, u64);
+statfunc u64 binary_filter_matches(u64, proc_info_t *);
+statfunc u64 equality_filter_matches(u64, void *, void *);
+statfunc u64 bool_filter_matches(u64, bool val);
+statfunc u64 compute_scopes(program_data_t *);
+statfunc u64 should_trace(program_data_t *);
+statfunc u64 should_submit(u32, event_data_t *);
+
+// CONSTANTS
 
 #define FILTER_UID_ENABLED       (1 << 0)
 #define FILTER_UID_OUT           (1 << 1)
@@ -34,7 +48,9 @@
 #define FILTER_MAX_NOT_SET 0
 #define FILTER_MIN_NOT_SET ULLONG_MAX
 
-static __always_inline u64
+// FUNCTIONS
+
+statfunc u64
 uint_filter_range_matches(u64 filter_out_scopes, void *filter_map, u64 value, u64 max, u64 min)
 {
     // check equality_filter_matches() for more info
@@ -56,7 +72,7 @@ uint_filter_range_matches(u64 filter_out_scopes, void *filter_map, u64 value, u6
     return equal_in_scopes | (filter_out_scopes & ~equality_set_in_scopes);
 }
 
-static __always_inline u64 binary_filter_matches(u64 filter_out_scopes, proc_info_t *proc_info)
+statfunc u64 binary_filter_matches(u64 filter_out_scopes, proc_info_t *proc_info)
 {
     // check equality_filter_matches() for more info
 
@@ -75,13 +91,13 @@ static __always_inline u64 binary_filter_matches(u64 filter_out_scopes, proc_inf
     return equal_in_scopes | (filter_out_scopes & ~equality_set_in_scopes);
 }
 
-static __always_inline u64 equality_filter_matches(u64 filter_out_scopes,
-                                                   void *filter_map,
-                                                   void *key)
+statfunc u64 equality_filter_matches(u64 filter_out_scopes, void *filter_map, void *key)
 {
     // check compute_scopes() for initial info
     //
-    // e.g.: cmdline: -f 2:comm=who -f 3:comm=ping -f 4:comm!=who
+    //   policy 2: comm=who
+    //   policy 3: comm=ping
+    //   policy 4: comm!=who
     //
     // filter_out_scopes = 0000 1000, since scope 4 has "not equal" for comm filter
     // filter_map        = comm_filter
@@ -128,11 +144,11 @@ static __always_inline u64 equality_filter_matches(u64 filter_out_scopes,
     return equal_in_scopes | (filter_out_scopes & ~equality_set_in_scopes);
 }
 
-static __always_inline u64 bool_filter_matches(u64 filter_out_scopes, bool val)
+statfunc u64 bool_filter_matches(u64 filter_out_scopes, bool val)
 {
     // check compute_scopes() for initial info
     //
-    // e.g.: cmdline: -f 5:container
+    //   policy 5: container=true
     //
     // considering an event from a container
     //
@@ -155,7 +171,7 @@ static __always_inline u64 bool_filter_matches(u64 filter_out_scopes, bool val)
     return filter_out_scopes ^ (val ? ~0ULL : 0);
 }
 
-static __always_inline u64 compute_scopes(program_data_t *p)
+statfunc u64 compute_scopes(program_data_t *p)
 {
     task_context_t *context = &p->task_info->context;
     u64 res = ~0ULL;
@@ -223,14 +239,14 @@ static __always_inline u64 compute_scopes(program_data_t *p)
     if (p->config->mnt_ns_filter_enabled_scopes) {
         u64 filter_out_scopes = p->config->mnt_ns_filter_out_scopes;
         u64 mask = ~p->config->mnt_ns_filter_enabled_scopes;
-        u32 mnt_id = context->mnt_id;
+        u64 mnt_id = context->mnt_id;
         res &= equality_filter_matches(filter_out_scopes, &mnt_ns_filter, &mnt_id) | mask;
     }
 
     if (p->config->pid_ns_filter_enabled_scopes) {
         u64 filter_out_scopes = p->config->pid_ns_filter_out_scopes;
         u64 mask = ~p->config->pid_ns_filter_enabled_scopes;
-        u32 pid_id = context->pid_id;
+        u64 pid_id = context->pid_id;
         res &= equality_filter_matches(filter_out_scopes, &pid_ns_filter, &pid_id) | mask;
     }
 
@@ -276,7 +292,7 @@ static __always_inline u64 compute_scopes(program_data_t *p)
     return res & p->config->enabled_scopes;
 }
 
-static __always_inline u64 should_trace(program_data_t *p)
+statfunc u64 should_trace(program_data_t *p)
 {
     // use cache whenever possible
     if (p->task_info->recompute_scope) {
@@ -289,7 +305,7 @@ static __always_inline u64 should_trace(program_data_t *p)
     return p->task_info->matched_scopes;
 }
 
-static __always_inline u64 should_submit(u32 event_id, event_data_t *event)
+statfunc u64 should_submit(u32 event_id, event_data_t *event)
 {
     event_config_t *event_config = bpf_map_lookup_elem(&events_map, &event_id);
     // if event config not set, don't submit
@@ -303,21 +319,6 @@ static __always_inline u64 should_submit(u32 event_id, event_data_t *event)
     event->param_types = event_config->param_types;
 
     return event->context.matched_policies;
-}
-
-// network events don't use event_data_t type, but only event_context_t so we ignore
-// param types used by the event
-static __always_inline u64 should_submit_by_ctx(u32 event_id, event_context_t *ctx)
-{
-    event_config_t *event_config = bpf_map_lookup_elem(&events_map, &event_id);
-    // if event config not set, don't submit
-    if (event_config == NULL)
-        return 0;
-
-    // align with previously matched policies
-    ctx->matched_policies &= event_config->submit_for_policies;
-
-    return ctx->matched_policies;
 }
 
 #endif

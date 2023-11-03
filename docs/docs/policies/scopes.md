@@ -69,12 +69,12 @@ scope:
     - container
 ```
 
-### !container
+### not-container
 Events are collected from everything but containers:
 
 ```yaml
 scope:
-    - !container
+    - not-container
 ```
 
 ### tree
@@ -85,12 +85,12 @@ scope:
     - tree=1000
 ```
 
-### binary, bin
-Events are collected from binary:
+### executable, exec
+Events are collected from executable:
 
 ```yaml
 scope:
-    - binary=/usr/bin/dig
+    - executable=/usr/bin/dig
 ```
 
 ### follow

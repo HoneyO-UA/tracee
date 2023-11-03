@@ -4,35 +4,37 @@
 #include <vmlinux.h>
 #include <vmlinux_missing.h>
 
+#include <linux/limits.h>
 #include <common/consts.h>
 
 typedef struct task_context {
-    u64 start_time; // thread's start time
-    u64 cgroup_id;
-    u32 pid;       // PID as in the userspace term
-    u32 tid;       // TID as in the userspace term
-    u32 ppid;      // Parent PID as in the userspace term
-    u32 host_pid;  // PID in host pid namespace
-    u32 host_tid;  // TID in host pid namespace
-    u32 host_ppid; // Parent PID in host pid namespace
-    u32 uid;
-    u32 mnt_id;
-    u32 pid_id;
-    char comm[TASK_COMM_LEN];
-    char uts_name[TASK_COMM_LEN];
-    u32 flags;
+    u64 start_time;               // task's start time
+    u64 cgroup_id;                // control group ID
+    u32 pid;                      // PID as in the userspace term
+    u32 tid;                      // TID as in the userspace term
+    u32 ppid;                     // Parent PID as in the userspace term
+    u32 host_pid;                 // PID in host pid namespace
+    u32 host_tid;                 // TID in host pid namespace
+    u32 host_ppid;                // Parent PID in host pid namespace
+    u32 uid;                      // task's effective UID
+    u32 mnt_id;                   // task's mount namespace ID
+    u32 pid_id;                   // task's pid namespace ID
+    char comm[TASK_COMM_LEN];     // task's comm
+    char uts_name[TASK_COMM_LEN]; // task's uts name
+    u32 flags;                    // task's status flags (see context_flags_e)
+    u64 leader_start_time;        // task leader's monotonic start time
+    u64 parent_start_time;        // parent process task leader's monotonic start time
 } task_context_t;
 
 typedef struct event_context {
-    u64 ts; // Timestamp
+    u64 ts; // timestamp
     task_context_t task;
     u32 eventid;
-    s32 syscall; // The syscall which triggered the event
+    s32 syscall; // syscall that triggered the event
     u64 matched_policies;
     s64 retval;
     u32 stack_id;
-    u16 processor_id; // The ID of the processor which processed the event
-    u8 argnum;
+    u16 processor_id; // ID of the processor that processed the event
 } event_context_t;
 
 enum event_id_e
@@ -94,7 +96,7 @@ enum event_id_e
     CALL_USERMODE_HELPER,
     DIRTY_PIPE_SPLICE,
     DEBUGFS_CREATE_FILE,
-    PRINT_SYSCALL_TABLE,
+    SYSCALL_TABLE_CHECK,
     DEBUGFS_CREATE_DIR,
     DEVICE_ADD,
     REGISTER_CHRDEV,
@@ -118,7 +120,18 @@ enum event_id_e
     SECURITY_BPF_PROG,
     PROCESS_EXECUTION_FAILED,
     HIDDEN_KERNEL_MODULE_SEEKER,
+    MODULE_LOAD,
+    MODULE_FREE,
     MAX_EVENT_ID,
+};
+
+enum signal_event_id_e
+{
+    SIGNAL_CGROUP_MKDIR = 5000,
+    SIGNAL_CGROUP_RMDIR,
+    SIGNAL_SCHED_PROCESS_FORK,
+    SIGNAL_SCHED_PROCESS_EXEC,
+    SIGNAL_SCHED_PROCESS_EXIT,
 };
 
 typedef struct args {
@@ -206,14 +219,18 @@ typedef struct task_info {
     u8 container_state;   // the state of the container the task resides in
 } task_info_t;
 
+typedef struct file_id {
+    dev_t device;
+    unsigned long inode;
+    u64 ctime;
+} file_id_t;
+
 typedef struct file_info {
     union {
         char pathname[MAX_CACHED_PATH_SIZE];
         char *pathname_p;
     };
-    dev_t device;
-    unsigned long inode;
-    u64 ctime;
+    file_id_t id;
 } file_info_t;
 
 typedef struct binary {
@@ -249,6 +266,10 @@ typedef struct bin_args {
 typedef struct simple_buf {
     u8 buf[MAX_PERCPU_BUFSIZE];
 } buf_t;
+
+typedef struct path_buf {
+    u8 buf[PATH_MAX];
+} path_buf_t;
 
 typedef struct path_filter {
     char path[MAX_PATH_PREF_SIZE];
@@ -330,15 +351,37 @@ typedef struct netconfig_entry {
     u32 capture_length;  // amount of network packet payload to capture (pcap)
 } netconfig_entry_t;
 
+typedef struct syscall_table_entry {
+    u64 address;
+} syscall_table_entry_t;
+
+typedef struct args_buffer {
+    u8 argnum;
+    char args[ARGS_BUF_SIZE];
+    u32 offset;
+} args_buffer_t;
+
 typedef struct event_data {
     event_context_t context;
-    char args[ARGS_BUF_SIZE];
-    u32 buf_off;
+    args_buffer_t args_buf;
     struct task_struct *task;
     u64 param_types;
 } event_data_t;
 
-#define MAX_EVENT_SIZE sizeof(event_context_t) + ARGS_BUF_SIZE
+// A control plane signal - sent to indicate some critical event which should be processed
+// with priority.
+//
+// Signals currently consist of shortened events sent only with their arguments.
+// As such, they consist of an event id and an argument buffer.
+// If we ever require a signal independent of an event, the event_id field should change
+// accordingly.
+typedef struct controlplane_signal {
+    u32 event_id;
+    args_buffer_t args_buf;
+} controlplane_signal_t;
+
+#define MAX_EVENT_SIZE  sizeof(event_context_t) + sizeof(u8) + ARGS_BUF_SIZE
+#define MAX_SIGNAL_SIZE sizeof(u32) + sizeof(u8) + ARGS_BUF_SIZE
 
 #define BPF_MAX_LOG_FILE_LEN 72
 
@@ -453,26 +496,23 @@ typedef struct net_ctx_ext {
 } net_ctx_ext_t;
 
 typedef struct kernel_mod {
-    bool seen_proc_modules;
-    bool seen_modules_list;
+    bool unused; // Empty struct yields an error from the verifier: "Invalid argument(-22)""
 } kernel_module_t;
+
+typedef struct kernel_new_mod {
+    u64 insert_time;
+    u64 last_seen_time;
+} kernel_new_mod_t;
+
+typedef struct kernel_deleted_mod {
+    u64 deleted_time;
+} kernel_deleted_mod_t;
 
 typedef struct rb_node_stack {
     struct rb_node *node;
 } rb_node_t;
 
-// version is not size limited - save only first 32 bytes.
-// srcversion is not size limited - modpost calculates srcversion with size: 25.
-#define MODULE_VERSION_MAX_LENGTH    32
 #define MODULE_SRCVERSION_MAX_LENGTH 25
-
-typedef struct kmod_data {
-    char name[MODULE_NAME_LEN];
-    char version[MODULE_VERSION_MAX_LENGTH];
-    char srcversion[MODULE_SRCVERSION_MAX_LENGTH];
-    u64 prev;
-    u64 next;
-} kmod_data_t;
 
 // this struct is used to encode which helpers are used in bpf program.
 // it is an array of 4 u64 values - 256 bits.
@@ -498,5 +538,8 @@ enum file_modification_op
     FILE_MODIFICATION_SUBMIT = 0,
     FILE_MODIFICATION_DONE,
 };
+
+// Type for values representing file types filters
+typedef u32 file_type_filter_t;
 
 #endif

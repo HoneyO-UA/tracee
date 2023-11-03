@@ -2,13 +2,9 @@ package cobra
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
-	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"gopkg.in/yaml.v3"
 
 	"github.com/aquasecurity/libbpfgo/helpers"
 
@@ -17,13 +13,14 @@ import (
 	"github.com/aquasecurity/tracee/pkg/cmd/flags/server"
 	"github.com/aquasecurity/tracee/pkg/cmd/initialize"
 	"github.com/aquasecurity/tracee/pkg/cmd/printer"
-	tracee "github.com/aquasecurity/tracee/pkg/ebpf"
+	"github.com/aquasecurity/tracee/pkg/config"
 	"github.com/aquasecurity/tracee/pkg/errfmt"
 	"github.com/aquasecurity/tracee/pkg/events"
 	"github.com/aquasecurity/tracee/pkg/logger"
+	"github.com/aquasecurity/tracee/pkg/policy"
 	"github.com/aquasecurity/tracee/pkg/signatures/engine"
 	"github.com/aquasecurity/tracee/pkg/signatures/signature"
-	"github.com/aquasecurity/tracee/types/trace"
+	"github.com/aquasecurity/tracee/types/detect"
 )
 
 func GetTraceeRunner(c *cobra.Command, version string) (cmd.Runner, error) {
@@ -32,8 +29,14 @@ func GetTraceeRunner(c *cobra.Command, version string) (cmd.Runner, error) {
 	// Log command line flags
 
 	// Logger initialization must be the first thing to be done,
-	// so all other packages can use it
-	logCfg, err := flags.PrepareLogger(viper.GetStringSlice("log"), true)
+	// so all other packages can use
+
+	logFlags, err := GetFlagsFromViper("log")
+	if err != nil {
+		return runner, err
+	}
+
+	logCfg, err := flags.PrepareLogger(logFlags, true)
 	if err != nil {
 		return runner, err
 	}
@@ -41,7 +44,12 @@ func GetTraceeRunner(c *cobra.Command, version string) (cmd.Runner, error) {
 
 	// Rego command line flags
 
-	rego, err := flags.PrepareRego(viper.GetStringSlice("rego"))
+	regoFlags, err := GetFlagsFromViper("rego")
+	if err != nil {
+		return runner, err
+	}
+
+	rego, err := flags.PrepareRego(regoFlags)
 	if err != nil {
 		return runner, err
 	}
@@ -51,7 +59,7 @@ func GetTraceeRunner(c *cobra.Command, version string) (cmd.Runner, error) {
 	sigs, err := signature.Find(
 		rego.RuntimeTarget,
 		rego.PartialEval,
-		viper.GetString("signatures-dir"),
+		viper.GetStringSlice("signatures-dir"),
 		nil,
 		rego.AIO,
 	)
@@ -63,19 +71,11 @@ func GetTraceeRunner(c *cobra.Command, version string) (cmd.Runner, error) {
 
 	// Initialize a tracee config structure
 
-	cfg := tracee.Config{
+	cfg := config.Config{
 		PerfBufferSize:     viper.GetInt("perf-buffer-size"),
 		BlobPerfBufferSize: viper.GetInt("blob-perf-buffer-size"),
-		ContainersEnrich:   viper.GetBool("containers"),
+		NoContainersEnrich: viper.GetBool("no-containers"),
 	}
-
-	// Output command line flags
-
-	output, err := flags.PrepareOutput(viper.GetStringSlice("output"), true)
-	if err != nil {
-		return runner, err
-	}
-	cfg.Output = output.TraceeConfig
 
 	// OS release information
 
@@ -95,15 +95,27 @@ func GetTraceeRunner(c *cobra.Command, version string) (cmd.Runner, error) {
 
 	// Container Runtime command line flags
 
-	sockets, err := flags.PrepareContainers(viper.GetStringSlice("crs"))
-	if err != nil {
-		return runner, err
+	if !cfg.NoContainersEnrich {
+		criFlags, err := GetFlagsFromViper("cri")
+		if err != nil {
+			return runner, err
+		}
+
+		sockets, err := flags.PrepareContainers(criFlags)
+		if err != nil {
+			return runner, err
+		}
+		cfg.Sockets = sockets
 	}
-	cfg.Sockets = sockets
 
 	// Cache command line flags
 
-	cache, err := flags.PrepareCache(viper.GetStringSlice("cache"))
+	cacheFlags, err := GetFlagsFromViper("cache")
+	if err != nil {
+		return runner, err
+	}
+
+	cache, err := flags.PrepareCache(cacheFlags)
 	if err != nil {
 		return runner, err
 	}
@@ -111,6 +123,19 @@ func GetTraceeRunner(c *cobra.Command, version string) (cmd.Runner, error) {
 	if cfg.Cache != nil {
 		logger.Debugw("Cache", "type", cfg.Cache.String())
 	}
+
+	// Process Tree command line flags
+
+	procTreeFlags, err := GetFlagsFromViper("proctree")
+	if err != nil {
+		return runner, err
+	}
+
+	procTree, err := flags.PrepareProcTree(procTreeFlags)
+	if err != nil {
+		return runner, err
+	}
+	cfg.ProcTree = procTree
 
 	// Capture command line flags - via cobra flag
 
@@ -127,7 +152,12 @@ func GetTraceeRunner(c *cobra.Command, version string) (cmd.Runner, error) {
 
 	// Capabilities command line flags
 
-	capsCfg, err := flags.PrepareCapabilities(viper.GetStringSlice("capabilities"))
+	capFlags, err := GetFlagsFromViper("capabilities")
+	if err != nil {
+		return runner, err
+	}
+
+	capsCfg, err := flags.PrepareCapabilities(capFlags)
 	if err != nil {
 		return runner, err
 	}
@@ -140,50 +170,54 @@ func GetTraceeRunner(c *cobra.Command, version string) (cmd.Runner, error) {
 		return runner, err
 	}
 
-	filterFlags, err := c.Flags().GetStringArray("filter")
+	scopeFlags, err := c.Flags().GetStringArray("scope")
 	if err != nil {
 		return runner, err
 	}
 
-	if len(policyFlags) > 0 && len(filterFlags) > 0 {
-		return runner, errors.New("policy and filter flags cannot be used together")
+	eventFlags, err := c.Flags().GetStringArray("events")
+	if err != nil {
+		return runner, err
 	}
 
-	var filterMap flags.FilterMap
+	if len(policyFlags) > 0 && len(scopeFlags) > 0 {
+		return runner, errors.New("policy and scope flags cannot be used together")
+	}
+	if len(policyFlags) > 0 && len(eventFlags) > 0 {
+		return runner, errors.New("policy and event flags cannot be used together")
+	}
+
+	var policies *policy.Policies
 
 	if len(policyFlags) > 0 {
-		policies, err := getPolicies(policyFlags)
-		if err != nil {
-			return runner, err
-		}
-
-		filterMap, err = flags.PrepareFilterMapFromPolicies(policies)
+		policies, err = createPoliciesFromPolicyFiles(policyFlags)
 		if err != nil {
 			return runner, err
 		}
 	} else {
-		filterMap, err = flags.PrepareFilterMapFromFlags(filterFlags)
+		policies, err = createPoliciesFromCLIFlags(scopeFlags, eventFlags)
 		if err != nil {
 			return runner, err
 		}
 	}
 
-	policies, err := flags.CreatePolicies(filterMap, true)
+	cfg.Policies = policies
+
+	// Output command line flags
+
+	outputFlags, err := GetFlagsFromViper("output")
 	if err != nil {
 		return runner, err
 	}
 
-	cfg.Policies = policies
-
-	// Container information printer flag
-
-	// TODO: set this on the printer config creation
-	containerMode := cmd.GetContainerMode(cfg)
-	for _, pConfig := range output.PrinterConfigs {
-		pConfig.ContainerMode = containerMode
+	output, err := flags.PrepareOutput(outputFlags, true)
+	if err != nil {
+		return runner, err
 	}
+	cfg.Output = output.TraceeConfig
 
-	broadcast, err := printer.NewBroadcast(output.PrinterConfigs)
+	// Create printer
+	p, err := printer.NewBroadcast(output.PrinterConfigs, cmd.GetContainerMode(cfg))
 	if err != nil {
 		return runner, err
 	}
@@ -224,25 +258,28 @@ func GetTraceeRunner(c *cobra.Command, version string) (cmd.Runner, error) {
 		return runner, errfmt.Errorf("failed preparing BPF object: %v", err)
 	}
 
-	cfg.ChanEvents = make(chan trace.Event, 1000)
-
 	// Prepare the server
 
-	httpServer, err := server.PrepareServer(
-		viper.GetString(server.ListenEndpointFlag),
+	httpServer, err := server.PrepareHTTPServer(
+		viper.GetString(server.HTTPListenEndpointFlag),
 		viper.GetBool(server.MetricsEndpointFlag),
 		viper.GetBool(server.HealthzEndpointFlag),
 		viper.GetBool(server.PProfEndpointFlag),
 		viper.GetBool(server.PyroscopeAgentFlag),
 	)
-
 	if err != nil {
 		return runner, err
 	}
 
-	runner.Server = httpServer
+	grpcServer, err := flags.PrepareGRPCServer(viper.GetString(server.GRPCListenEndpointFlag))
+	if err != nil {
+		return runner, err
+	}
+
+	runner.HTTPServer = httpServer
+	runner.GRPCServer = grpcServer
 	runner.TraceeConfig = cfg
-	runner.Printer = broadcast
+	runner.Printer = p
 
 	// parse arguments must be enabled if the rule engine is part of the pipeline
 	runner.TraceeConfig.Output.ParseArguments = true
@@ -253,77 +290,8 @@ func GetTraceeRunner(c *cobra.Command, version string) (cmd.Runner, error) {
 		// This used to be a flag, we have removed the flag from this binary to test
 		// if users do use it or not.
 		SignatureBufferSize: 1000,
+		DataSources:         []detect.DataSource{},
 	}
 
 	return runner, nil
-}
-
-func getPolicies(paths []string) ([]flags.PolicyFile, error) {
-	policies := make([]flags.PolicyFile, 0)
-
-	for _, path := range paths {
-		if path == "" {
-			return nil, errfmt.Errorf("policy path cannot be empty")
-		}
-
-		path, err := filepath.Abs(path)
-		if err != nil {
-			return nil, err
-		}
-
-		fileInfo, err := os.Stat(path)
-		if err != nil {
-			return nil, err
-		}
-
-		if !fileInfo.IsDir() {
-			p, err := getPoliciesFromFile(path)
-			if err != nil {
-				return nil, err
-			}
-			policies = append(policies, p)
-
-			continue
-		}
-
-		files, err := os.ReadDir(path)
-		if err != nil {
-			return nil, err
-		}
-
-		for _, file := range files {
-			if file.IsDir() {
-				continue
-			}
-
-			// TODO: support json
-			if strings.HasSuffix(file.Name(), ".yaml") ||
-				strings.HasSuffix(file.Name(), ".yml") {
-				policy, err := getPoliciesFromFile(filepath.Join(path, file.Name()))
-				if err != nil {
-					return nil, err
-				}
-
-				policies = append(policies, policy)
-			}
-		}
-	}
-
-	return policies, nil
-}
-
-func getPoliciesFromFile(filePath string) (flags.PolicyFile, error) {
-	var p flags.PolicyFile
-
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return p, err
-	}
-
-	err = yaml.Unmarshal(data, &p)
-	if err != nil {
-		return p, err
-	}
-
-	return p, nil
 }

@@ -36,6 +36,8 @@ CMD_STATICCHECK ?= staticcheck
 CMD_STRIP ?= llvm-strip
 CMD_TOUCH ?= touch
 CMD_TR ?= tr
+CMD_PROTOC ?= protoc
+CMD_PANDOC ?= pandoc
 
 .check_%:
 #
@@ -165,6 +167,7 @@ env:
 	@echo "CMD_STRIP                $(CMD_STRIP)"
 	@echo "CMD_TOUCH                $(CMD_TOUCH)"
 	@echo "CMD_TR                   $(CMD_TR)"
+	@echo "CMD_PROTOC               $(CMD_PROTOC)"
 	@echo ---------------------------------------
 	@echo "LIB_ELF                  $(LIB_ELF)"
 	@echo "LIB_ZLIB                 $(LIB_ZLIB)"
@@ -227,6 +230,8 @@ env:
 	@echo "E2E_INST_DIR             $(E2E_INST_DIR)"
 	@echo "E2E_INST_SRC             $(E2E_INST_SRC)"
 	@echo ---------------------------------------
+	@echo "TRACEE_PROTOS            $(TRACEE_PROTOS)"
+	@echo ---------------------------------------
 
 #
 # usage
@@ -241,16 +246,16 @@ help:
 	@echo ""
 	@echo "# build"
 	@echo ""
-	@echo "    $$ make all                      		# build tracee-ebpf, tracee-rules & signatures"
-	@echo "    $$ make bpf                      		# build ./dist/tracee.bpf.o"
-	@echo "    $$ make tracee-ebpf              		# build ./dist/tracee-ebpf"
-	@echo "    $$ make tracee-rules             		# build ./dist/tracee-rules"
-	@echo "    $$ make tracee-bench             		# build ./dist/tracee-bench"
-	@echo "    $$ make tracee-gptdocs             		# build ./dist/tracee-gptdocs"
-	@echo "    $$ make signatures               		# build ./dist/signatures"
-	@echo "    $$ make e2e-net-signatures       		# build ./dist/e2e-net-signatures"
-	@echo "    $$ make e2e-instrumentation-signatures	# build ./dist/e2e-instrumentation-signatures"
-	@echo "    $$ make tracee                   		# build ./dist/tracee"
+	@echo "    $$ make all                      # build tracee-ebpf, tracee-rules & signatures"
+	@echo "    $$ make bpf                      # build ./dist/tracee.bpf.o"
+	@echo "    $$ make tracee-ebpf              # build ./dist/tracee-ebpf"
+	@echo "    $$ make tracee-rules             # build ./dist/tracee-rules"
+	@echo "    $$ make tracee-bench             # build ./dist/tracee-bench"
+	@echo "    $$ make tracee-gptdocs           # build ./dist/tracee-gptdocs"
+	@echo "    $$ make signatures               # build ./dist/signatures"
+	@echo "    $$ make e2e-net-signatures       # build ./dist/e2e-net-signatures"
+	@echo "    $$ make e2e-inst-signatures      # build ./dist/e2e-inst-signatures"
+	@echo "    $$ make tracee                   # build ./dist/tracee"
 	@echo ""
 	@echo "# clean"
 	@echo ""
@@ -393,6 +398,8 @@ GO_ENV_EBPF += GOARCH=$(GO_ARCH)
 GO_ENV_EBPF += CGO_CFLAGS=$(CUSTOM_CGO_CFLAGS)
 GO_ENV_EBPF += CGO_LDFLAGS=$(CUSTOM_CGO_LDFLAGS)
 
+TRACEE_PROTOS = ./api/v1beta1/*.proto
+
 #
 # btfhub (expensive: only run if ebpf obj changed)
 #
@@ -438,7 +445,7 @@ $(OUTPUT_DIR)/tracee: \
 		-tags $(GO_TAGS_EBPF) \
 		-ldflags="$(GO_DEBUG_FLAG) \
 			-extldflags \"$(CGO_EXT_LDFLAGS_EBPF)\" \
-			-X github.com/aquasecurity/tracee/cmd/tracee/cmd.version=\"$(VERSION)\" \
+			-X github.com/aquasecurity/tracee/pkg/version.version=\"$(VERSION)\" \
 			" \
 		-v -o $@ \
 		./cmd/tracee
@@ -667,17 +674,17 @@ clean-e2e-net-signatures:
 
 # e2e instrumentation signatures
 
-E2E_INST_DIR ?= tests/e2e-instrumentation-signatures
+E2E_INST_DIR ?= tests/e2e-inst-signatures
 E2E_INST_SRC := $(shell find $(E2E_INST_DIR) \
 		-type f \
 		-name '*.go' \
 		! -name '*_test.go' \
 		)
 
-.PHONY: e2e-instrumentation-signatures
-e2e-instrumentation-signatures: $(OUTPUT_DIR)/e2e-instrumentation-signatures
+.PHONY: e2e-inst-signatures
+e2e-inst-signatures: $(OUTPUT_DIR)/e2e-inst-signatures
 
-$(OUTPUT_DIR)/e2e-instrumentation-signatures: \
+$(OUTPUT_DIR)/e2e-inst-signatures: \
 	$(E2E_INST_SRC) \
 	| .checkver_$(CMD_GO) \
 	.check_$(CMD_INSTALL) \
@@ -689,13 +696,13 @@ $(OUTPUT_DIR)/e2e-instrumentation-signatures: \
 		-o $@/builtin.so \
 		$(E2E_INST_SRC)
 
-.PHONY: clean-e2e-instrumentation-signatures
-clean-e2e-instrumentation-signatures:
+.PHONY: clean-e2e-inst-signatures
+clean-e2e-inst-signatures:
 #
-	$(CMD_RM) -rf $(OUTPUT_DIR)/e2e-instrumentation-signatures
+	$(CMD_RM) -rf $(OUTPUT_DIR)/e2e-inst-signatures
 
 #
-# tests
+# unit tests
 #
 
 .PHONY: test-unit
@@ -704,11 +711,12 @@ test-unit: \
 	tracee-ebpf \
 	test-types
 #
-	$(GO_ENV_EBPF) \
+	@$(GO_ENV_EBPF) \
 	$(CMD_GO) test \
 		-tags ebpf \
 		-short \
 		-race \
+		-shuffle on \
 		-v \
 		-coverprofile=coverage.txt \
 		./cmd/... \
@@ -720,25 +728,41 @@ test-types: \
 	.checkver_$(CMD_GO)
 #
 	# Note that we must changed the directory here because types is a standalone Go module.
-	cd ./types && $(CMD_GO) test \
+	@cd ./types && $(CMD_GO) test \
 		-short \
 		-race \
+		-shuffle on \
 		-v \
 		-coverprofile=coverage.txt \
 		./...
 
+#
+# integration tests
+#
+
+.PHONY: $(OUTPUT_DIR)/syscaller
+$(OUTPUT_DIR)/syscaller: \
+	$(OUTPUT_DIR)/libbpf/libbpf.a \
+	| .check_$(CMD_GO)
+#
+	$(GO_ENV_EBPF) \
+	$(CMD_GO) build -o $(OUTPUT_DIR)/syscaller ./tests/integration/syscaller/cmd
+
 .PHONY: test-integration
 test-integration: \
 	.checkver_$(CMD_GO) \
+	$(OUTPUT_DIR)/syscaller \
 	tracee-ebpf
 #
-	$(GO_ENV_EBPF) \
+	@$(GO_ENV_EBPF) \
 	$(CMD_GO) test \
 		-tags $(GO_TAGS_EBPF) \
 		-ldflags="$(GO_DEBUG_FLAG) \
 			-extldflags \"$(CGO_EXT_LDFLAGS_EBPF)\" \
 			-X main.version=\"$(VERSION)\" \
 			" \
+		-shuffle on \
+		-race \
 		-v \
 		-p 1 \
 		-count=1 \
@@ -756,6 +780,29 @@ test-upstream-libbpfgo: \
 	$(OUTPUT_DIR)/libbpf/libbpf.a
 #
 	./tests/libbpfgo.sh $(GO_ENV_EBPF)
+
+#
+# performance tests
+#
+
+.PHONY: test-performance
+test-performance: \
+	.checkver_$(CMD_GO) \
+	tracee
+#
+	@$(GO_ENV_EBPF) \
+	$(CMD_GO) test \
+		-tags $(GO_TAGS_EBPF) \
+		-ldflags="$(GO_DEBUG_FLAG) \
+			-extldflags \"$(CGO_EXT_LDFLAGS_EBPF)\" \
+			-X main.version=\"$(VERSION)\" \
+			" \
+		-race \
+		-shuffle on \
+		-v \
+		-p 1 \
+		-count=1 \
+		./tests/perftests/... \
 
 #
 # code checkers (hidden from help on purpose)
@@ -817,6 +864,82 @@ check-err: \
 		-ignore '[rR]ead|[wW]rite' \
 		-ignore 'RegisterEventProcessor' \
 		./...
+
+#
+# pull request verifier
+#
+
+LOGFROM ?= main
+
+.PHONY: check-pr
+check-pr: \
+	check-fmt check-lint check-code \
+	| .check_$(CMD_GIT)
+#
+	@echo
+	@echo "👇 PR Comment BEGIN"
+	@echo
+
+	@$(CMD_GIT) \
+		log $(LOGFROM)..HEAD \
+		--pretty=format:'%C(auto,yellow)%h%Creset **%C(auto,red)%s%Creset**'
+
+	@echo
+	@echo
+
+	@output=$$(git rev-list $(LOGFROM)..HEAD | while read commit; do \
+		if [[ "$$(git show --no-patch --format=%b $$commit)" ]]; then \
+			$(CMD_GIT) \
+				show -s $$commit \
+				--color=always \
+				--format='%C(auto,yellow)%h%Creset **%C(auto,red)%s%Creset**%n%n```%n%b%n```%n'; \
+			echo; \
+		fi; \
+	done); \
+	echo "$$output"
+
+	@echo
+	@echo "👆 PR Comment END"
+	@echo
+
+#
+# tracee.proto
+#
+
+.PHONY: protoc
+protoc:
+#
+	$(CMD_PROTOC) \
+		--go_out=. \
+		--go_opt=paths=source_relative \
+		--go-grpc_out=. \
+		--go-grpc_opt=paths=source_relative $(TRACEE_PROTOS)
+
+#
+# man pages
+#
+
+MARKDOWN_DIR ?= ./docs/docs/flags
+MAN_DIR ?= ./docs/man
+MARKDOW_FILES := $(shell find $(MARKDOWN_DIR) \
+					-type f \
+					-name '*.md' \
+				)
+MAN_FILES := $(patsubst $(MARKDOWN_DIR)/%.md,$(MAN_DIR)/%,$(MARKDOW_FILES))
+
+$(MAN_DIR)/%: $(MARKDOWN_DIR)/%.md \
+	| .check_$(CMD_PANDOC) \
+#
+	@echo Generating $@
+	@$(CMD_PANDOC) \
+		--verbose \
+		--standalone \
+		--to man \
+		$< \
+		-o $@
+
+.PHONY: man
+man: $(MAN_FILES)
 
 #
 # clean

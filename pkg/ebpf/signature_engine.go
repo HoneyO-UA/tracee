@@ -3,8 +3,10 @@ package ebpf
 import (
 	"context"
 
+	"github.com/aquasecurity/tracee/pkg/containers"
 	"github.com/aquasecurity/tracee/pkg/events"
 	"github.com/aquasecurity/tracee/pkg/logger"
+	"github.com/aquasecurity/tracee/pkg/proctree"
 	"github.com/aquasecurity/tracee/pkg/signatures/engine"
 	"github.com/aquasecurity/tracee/types/detect"
 	"github.com/aquasecurity/tracee/types/protocol"
@@ -19,6 +21,10 @@ func (t *Tracee) engineEvents(ctx context.Context, in <-chan *trace.Event) (<-ch
 	engineOutput := make(chan detect.Finding, 100)
 	engineInput := make(chan protocol.Event)
 	source := engine.EventSources{Tracee: engineInput}
+
+	// Prepare built in data sources
+	t.config.EngineConfig.DataSources = t.PrepareBuiltinDataSources()
+
 	sigEngine, err := engine.NewEngine(t.config.EngineConfig, source, engineOutput)
 	if err != nil {
 		logger.Fatalw("failed to start signature engine in \"everything is an event\" mode", "error", err)
@@ -30,6 +36,11 @@ func (t *Tracee) engineEvents(ctx context.Context, in <-chan *trace.Event) (<-ch
 		if err != nil {
 			logger.Errorw("Registering signature engine prometheus metrics", "error", err)
 		}
+	}
+
+	err = t.sigEngine.Init()
+	if err != nil {
+		logger.Fatalw("failed to initialize signature engine in \"everything is an event\" mode", "error", err)
 	}
 
 	go t.sigEngine.Start(ctx)
@@ -54,7 +65,7 @@ func (t *Tracee) engineEvents(ctx context.Context, in <-chan *trace.Event) (<-ch
 				id := events.ID(event.EventID)
 
 				// if the event is marked as submit, we pass it to the engine
-				if t.events[id].submit > 0 {
+				if t.eventsState[id].Submit > 0 {
 					err := t.parseArguments(event)
 					if err != nil {
 						t.handleError(err)
@@ -82,13 +93,17 @@ func (t *Tracee) engineEvents(ctx context.Context, in <-chan *trace.Event) (<-ch
 		for {
 			select {
 			case finding := <-engineOutput:
+				if finding.Event.Payload == nil {
+					continue // might happen during initialization (ctrl+c seg faults)
+				}
+
 				event, err := FindingToEvent(finding)
 				if err != nil {
 					t.handleError(err)
 					continue
 				}
 
-				if !t.shouldProcessEvent(event) {
+				if t.matchPolicies(event) == 0 {
 					_ = t.stats.EventsFiltered.Increment()
 					continue
 				}
@@ -101,4 +116,21 @@ func (t *Tracee) engineEvents(ctx context.Context, in <-chan *trace.Event) (<-ch
 	}()
 
 	return out, errc
+}
+
+// PrepareBuiltinDataSources returns a list of all data sources tracee makes available built-in
+func (t *Tracee) PrepareBuiltinDataSources() []detect.DataSource {
+	datasources := []detect.DataSource{}
+
+	// Containers Data Source
+	datasources = append(datasources, containers.NewDataSource(t.containers))
+
+	// Process Tree Data Source
+	switch t.config.ProcTree.Source {
+	case proctree.SourceNone:
+	default:
+		datasources = append(datasources, proctree.NewDataSource(t.processTree))
+	}
+
+	return datasources
 }

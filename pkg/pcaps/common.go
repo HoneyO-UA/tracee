@@ -9,6 +9,7 @@ import (
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcapgo"
 
+	"github.com/aquasecurity/tracee/pkg/config"
 	"github.com/aquasecurity/tracee/pkg/errfmt"
 	"github.com/aquasecurity/tracee/pkg/logger"
 	"github.com/aquasecurity/tracee/pkg/utils"
@@ -55,12 +56,12 @@ func initializeGlobalVars(output *os.File) {
 
 // getItemIndexFromEvent returns correct trace.Event variable according to
 // given PcapType
-func getItemIndexFromEvent(event *trace.Event, itemType PcapType) interface{} {
+func getItemIndexFromEvent(event *trace.Event, itemType PcapType) string {
 	switch itemType {
 	case Single:
 		return itemType.String()
 	case Process:
-		return event.HostThreadID
+		return fmt.Sprint(event.HostThreadID)
 	case Container:
 		return event.Container.ID
 	case Command:
@@ -71,7 +72,7 @@ func getItemIndexFromEvent(event *trace.Event, itemType PcapType) interface{} {
 		return ret
 	}
 
-	return new(interface{})
+	return ""
 }
 
 // getPcapFileName returns a string used to create a pcap file under the
@@ -223,32 +224,32 @@ func getPcapFileAndWriter(event *trace.Event, t PcapType) (
 }
 
 // configToPcapType converts a simple bool like config struct to internal config
-func configToPcapType(simple Config) PcapType {
-	var config PcapType
+func configToPcapType(simple config.PcapsConfig) PcapType {
+	var cfg PcapType
 
 	if simple.CaptureSingle {
-		config |= Single
+		cfg |= Single
 	}
 	if simple.CaptureProcess {
-		config |= Process
+		cfg |= Process
 	}
 	if simple.CaptureContainer {
-		config |= Container
+		cfg |= Container
 	}
 	if simple.CaptureCommand {
-		config |= Command
+		cfg |= Command
 	}
 
-	return config
+	return cfg
 }
 
 // PcapsEnabled checks if the simple config has any bool value set
-func PcapsEnabled(simple Config) bool {
-	config := configToPcapType(simple)
-	return config != None
+func PcapsEnabled(simple config.PcapsConfig) bool {
+	cfg := configToPcapType(simple)
+	return cfg != None
 }
 
-func GetPcapOptions(c Config) PcapOption {
+func GetPcapOptions(c config.PcapsConfig) PcapOption {
 	var options PcapOption
 
 	if c.CaptureFiltered {

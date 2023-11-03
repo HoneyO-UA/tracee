@@ -1,6 +1,7 @@
 # Tracing Output Options
 
-Tracee supports different output options for customizing the way events are printed. For a complete list of available options, run `tracee --help output`.
+<!-- TODO: build man page -->
+Tracee supports different output options for customizing the way events are printed. For a complete list of available options. <!--, see `man tracee-output`. -->
 
 Available options:
 
@@ -9,7 +10,7 @@ Available options:
     Pick stack memory address from each event
 
     ```console
-    sudo ./dist/tracee --output json --filter comm=bash --filter follow --filter event=openat --output option:stack-addresses
+    sudo ./dist/tracee --output json --scope comm=bash --scope follow --events openat --output option:stack-addresses
     ```
 
     ```json
@@ -23,7 +24,7 @@ Available options:
     *readable** format.
 
     ```console
-    sudo ./dist/tracee --output json --filter comm=bash --filter follow --filter event=security_file_open --output option:parse-arguments
+    sudo ./dist/tracee --output json --scope comm=bash --scope follow --events security_file_open --output option:parse-arguments
     ```
 
     ```json
@@ -45,7 +46,7 @@ Available options:
     enriched with **file paths**. This option also enables `parse-arguments`.
 
     ```console
-    sudo ./dist/tracee --output json --filter comm=bash --filter follow --filter event=read --output option:parse-arguments-fds
+    sudo ./dist/tracee --output json --scope comm=bash --scope follow --events read --output option:parse-arguments-fds
     ```
 
     ```json
@@ -68,7 +69,7 @@ Available options:
     whenever an event is detected, specially when detecting **execve** event.
 
     ```console
-    sudo ./dist/tracee --output json --filter comm=bash --filter follow --filter event=execve --output option:parse-arguments --output option:exec-env
+    sudo ./dist/tracee --output json --scope comm=bash --scope follow --events execve --output option:parse-arguments --output option:exec-env
     ```
 
     ```json
@@ -90,7 +91,7 @@ Available options:
     example).
 
     ```console
-    sudo ./dist/tracee --output json --filter comm=bash --filter follow --filter event=sched_process_exec --output option:parse-arguments --output option:exec-hash
+    sudo ./dist/tracee --output json --scope comm=bash --scope follow --events sched_process_exec --output option:parse-arguments --output option:exec-hash
     ```
 
     ```json

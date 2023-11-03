@@ -4,12 +4,11 @@ import (
 	"os"
 	"strings"
 
-	"github.com/aquasecurity/tracee/pkg/cmd/printer"
-	tracee "github.com/aquasecurity/tracee/pkg/ebpf"
+	"github.com/aquasecurity/tracee/pkg/config"
 	"github.com/aquasecurity/tracee/pkg/errfmt"
 )
 
-func traceeEbpfOutputHelp() string {
+func outputHelp() string {
 	return `Control how and where output is printed.
 Possible options:
 [format:]table                                     output events in table format (default)
@@ -37,9 +36,9 @@ Use this flag multiple times to choose multiple output options
 `
 }
 
-func TraceeEbpfPrepareOutput(outputSlice []string, newBinary bool) (OutputConfig, error) {
-	outConfig := OutputConfig{}
-	traceeConfig := &tracee.OutputConfig{}
+func TraceeEbpfPrepareOutput(outputSlice []string, newBinary bool) (PrepareOutputResult, error) {
+	outConfig := PrepareOutputResult{}
+	traceeConfig := &config.OutputConfig{}
 
 	var outPath string
 
@@ -73,7 +72,7 @@ func TraceeEbpfPrepareOutput(outputSlice []string, newBinary bool) (OutputConfig
 		}
 	}
 
-	printerConfigs := make([]printer.Config, 0)
+	printerConfigs := make([]config.PrinterConfig, 0)
 
 	if printerKind == "table" {
 		if err := setOption(traceeConfig, "parse-arguments", newBinary); err != nil {
@@ -82,7 +81,7 @@ func TraceeEbpfPrepareOutput(outputSlice []string, newBinary bool) (OutputConfig
 	}
 
 	if outPath == "" {
-		stdoutConfig := printer.Config{
+		stdoutConfig := config.PrinterConfig{
 			Kind:       printerKind,
 			OutFile:    os.Stdout,
 			RelativeTS: traceeConfig.RelativeTime,
@@ -95,7 +94,7 @@ func TraceeEbpfPrepareOutput(outputSlice []string, newBinary bool) (OutputConfig
 			return outConfig, err
 		}
 
-		printerConfig := printer.Config{
+		printerConfig := config.PrinterConfig{
 			Kind:       printerKind,
 			OutPath:    outPath,
 			OutFile:    file,

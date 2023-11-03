@@ -3,60 +3,94 @@
 
 #include <vmlinux.h>
 
+#include <common/logging.h>
 #include <common/task.h>
 #include <common/cgroups.h>
 
-static __always_inline int
+// PROTOTYPES
+
+statfunc int init_context(void *, event_context_t *, struct task_struct *, u32);
+statfunc task_info_t *init_task_info(u32, u32, scratch_t *);
+statfunc bool context_changed(task_context_t *, task_context_t *);
+statfunc int init_program_data(program_data_t *, void *);
+statfunc int init_tailcall_program_data(program_data_t *, void *);
+statfunc void reset_event_args(program_data_t *);
+
+// FUNCTIONS
+
+statfunc int
 init_context(void *ctx, event_context_t *context, struct task_struct *task, u32 options)
 {
     long ret = 0;
     u64 id = bpf_get_current_pid_tgid();
-    context->task.start_time = get_task_start_time(task);
+
+    // NOTE: parent is always a real process, not a potential thread group leader
+    struct task_struct *leader = get_leader_task(task);
+    struct task_struct *up_parent = get_leader_task(get_parent_task(leader));
+
+    // Task Info on Host
     context->task.host_tid = id;
     context->task.host_pid = id >> 32;
-    context->task.host_ppid = get_task_ppid(task);
+    context->task.host_ppid = get_task_pid(up_parent); // always a real process (not a lwp)
+    // Namespaces Info
     context->task.tid = get_task_ns_pid(task);
     context->task.pid = get_task_ns_tgid(task);
-    context->task.ppid = get_task_ns_ppid(task);
+
+    u32 task_pidns_id = get_task_pid_ns_id(task);
+    u32 up_parent_pidns_id = get_task_pid_ns_id(up_parent);
+
+    if (task_pidns_id == up_parent_pidns_id)
+        context->task.ppid = get_task_ns_pid(up_parent); // e.g: pid 1 will have nsppid 0
+
+    context->task.pid_id = task_pidns_id;
     context->task.mnt_id = get_task_mnt_ns_id(task);
-    context->task.pid_id = get_task_pid_ns_id(task);
+    // User Info
     context->task.uid = bpf_get_current_uid_gid();
+    // Times
+    context->task.start_time = get_task_start_time(task);
+    context->task.leader_start_time = get_task_start_time(leader);
+    context->task.parent_start_time = get_task_start_time(up_parent);
+
     context->task.flags = 0;
+
     if (is_compat(task))
         context->task.flags |= IS_COMPAT_FLAG;
+
+    // Program name
     __builtin_memset(context->task.comm, 0, sizeof(context->task.comm));
     ret = bpf_get_current_comm(&context->task.comm, sizeof(context->task.comm));
     if (unlikely(ret < 0)) {
-        // disable logging as a workaround for instruction limit verifier error on kernel 4.19
-        // tracee_log(ctx, BPF_LOG_LVL_ERROR, BPF_LOG_ID_GET_CURRENT_COMM, ret);
+        tracee_log(ctx, BPF_LOG_LVL_ERROR, BPF_LOG_ID_GET_CURRENT_COMM, ret);
         return -1;
     }
 
+    // UTS Name
     char *uts_name = get_task_uts_name(task);
     if (uts_name) {
         __builtin_memset(context->task.uts_name, 0, sizeof(context->task.uts_name));
         bpf_probe_read_str(&context->task.uts_name, TASK_COMM_LEN, uts_name);
     }
+
+    // Cgroup ID
     if (options & OPT_CGROUP_V1) {
         context->task.cgroup_id = get_cgroup_v1_subsys0_id(task);
     } else {
         context->task.cgroup_id = bpf_get_current_cgroup_id();
     }
 
+    // Context timestamp
     context->ts = bpf_ktime_get_ns();
-    context->argnum = 0;
-
     // Clean Stack Trace ID
     context->stack_id = 0;
-
+    // Processor ID
     context->processor_id = (u16) bpf_get_smp_processor_id();
-
+    // Syscall ID
     context->syscall = get_task_syscall_id(task);
 
     return 0;
 }
 
-static __always_inline task_info_t *init_task_info(u32 tid, u32 pid, scratch_t *scratch)
+statfunc task_info_t *init_task_info(u32 tid, u32 pid, scratch_t *scratch)
 {
     int zero = 0;
 
@@ -85,7 +119,7 @@ static __always_inline task_info_t *init_task_info(u32 tid, u32 pid, scratch_t *
     return bpf_map_lookup_elem(&task_info_map, &tid);
 }
 
-static __always_inline bool context_changed(task_context_t *old, task_context_t *new)
+statfunc bool context_changed(task_context_t *old, task_context_t *new)
 {
     return (old->cgroup_id != new->cgroup_id) || old->uid != new->uid ||
            old->mnt_id != new->mnt_id || old->pid_id != new->pid_id ||
@@ -96,7 +130,7 @@ static __always_inline bool context_changed(task_context_t *old, task_context_t 
 }
 
 // clang-format off
-static __always_inline int init_program_data(program_data_t *p, void *ctx)
+statfunc int init_program_data(program_data_t *p, void *ctx)
 {
     long ret = 0;
     int zero = 0;
@@ -121,7 +155,8 @@ static __always_inline int init_program_data(program_data_t *p, void *ctx)
     }
 
     p->ctx = ctx;
-    p->event->buf_off = 0;
+    p->event->args_buf.offset = 0;
+    p->event->args_buf.argnum = 0;
 
     bool container_lookup_required = true;
 
@@ -179,7 +214,7 @@ out:
 }
 // clang-format on
 
-static __always_inline int init_tailcall_program_data(program_data_t *p, void *ctx)
+statfunc int init_tailcall_program_data(program_data_t *p, void *ctx)
 {
     u32 zero = 0;
 
@@ -202,10 +237,10 @@ static __always_inline int init_tailcall_program_data(program_data_t *p, void *c
 }
 
 // use this function for programs that send more than one event
-static __always_inline void reset_event_args(program_data_t *p)
+statfunc void reset_event_args(program_data_t *p)
 {
-    p->event->buf_off = 0;
-    p->event->context.argnum = 0;
+    p->event->args_buf.offset = 0;
+    p->event->args_buf.argnum = 0;
 }
 
 #endif

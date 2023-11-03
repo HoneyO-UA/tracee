@@ -13,7 +13,8 @@ import (
 )
 
 type (
-	Level = zapcore.Level
+	Level       = zapcore.Level
+	AtomicLevel = zap.AtomicLevel
 )
 
 const (
@@ -31,6 +32,7 @@ type Config = zap.Config
 var (
 	NewDevelopmentConfig = zap.NewDevelopmentConfig
 	NewProductionConfig  = zap.NewProductionConfig
+	NewAtomicLevelAt     = zap.NewAtomicLevelAt
 )
 
 type Encoder = zapcore.Encoder
@@ -69,7 +71,7 @@ func NewLogger(cfg LoggerConfig) LoggerInterface {
 	return zap.New(zapcore.NewCore(
 		cfg.Encoder,
 		zapcore.AddSync(cfg.Writer),
-		zapcore.Level(cfg.Level),
+		cfg.Level,
 	)).Sugar()
 }
 
@@ -83,18 +85,27 @@ const (
 // Users importing tracee as a library may choose to construct a tracee flavored logger with
 // NewLogger() or supply their own interface.
 //
-// Tracee offers aggregation support on top of any logger implementation complying to it's interface.
+// Tracee offers aggregation and filtering support on top of any logger implementation complying to it's interface.
 type LoggingConfig struct {
 	Logger        LoggerInterface
+	LoggerConfig  LoggerConfig
+	Filter        LoggerFilter
 	Aggregate     bool
 	FlushInterval time.Duration
 }
 
 // LoggerConfig defines the configuration parameters for constructing tracee's logger implementation.
+// Logger user AtomicLevel to allow changing the logging level at runtime.
 type LoggerConfig struct {
 	Writer  io.Writer
-	Level   Level
+	Level   AtomicLevel
 	Encoder Encoder
+}
+
+// SetLevel sets the logging level of the package level logger.
+// It is thread safe.
+func (lc LoggingConfig) SetLevel(lvl Level) {
+	lc.LoggerConfig.Level.SetLevel(lvl)
 }
 
 func defaultEncoder() Encoder {
@@ -104,14 +115,17 @@ func defaultEncoder() Encoder {
 func NewDefaultLoggerConfig() LoggerConfig {
 	return LoggerConfig{
 		Writer:  os.Stderr,
-		Level:   DefaultLevel,
+		Level:   NewAtomicLevelAt(DefaultLevel),
 		Encoder: defaultEncoder(),
 	}
 }
 
 func NewDefaultLoggingConfig() LoggingConfig {
+	loggerConfig := NewDefaultLoggerConfig()
 	return LoggingConfig{
-		Logger:        NewLogger(NewDefaultLoggerConfig()),
+		Logger:        NewLogger(loggerConfig),
+		LoggerConfig:  loggerConfig,
+		Filter:        NewLoggerFilter(),
 		Aggregate:     false,
 		FlushInterval: DefaultFlushInterval,
 	}
@@ -195,6 +209,10 @@ func debugw(skip int, l *Logger, msg string, keysAndValues ...interface{}) {
 	}
 
 	callerInfo := getCallerInfo(skip + 1)
+	if !shouldOutput(msg, DebugLevel, callerInfo) {
+		return
+	}
+
 	origin := strings.Join([]string{callerInfo.pkg, callerInfo.file, strconv.Itoa(callerInfo.line)}, ":")
 	calls := formatCallFlow(callerInfo.functions)
 	keysAndValues = append(keysAndValues, "origin", origin, "calls", calls)
@@ -216,6 +234,11 @@ func infow(skip int, l *Logger, msg string, keysAndValues ...interface{}) {
 		return
 	}
 
+	callerInfo := getCallerInfo(skip + 1)
+	if !shouldOutput(msg, InfoLevel, callerInfo) {
+		return
+	}
+
 	l.l.Infow(msg, keysAndValues...)
 }
 
@@ -230,6 +253,11 @@ func (l *Logger) Infow(msg string, keysAndValues ...interface{}) {
 // Warn
 func warnw(skip int, l *Logger, msg string, keysAndValues ...interface{}) {
 	if aggregateLog(skip+1, l, WarnLevel, msg) {
+		return
+	}
+
+	callerInfo := getCallerInfo(skip + 1)
+	if !shouldOutput(msg, WarnLevel, callerInfo) {
 		return
 	}
 
@@ -250,6 +278,11 @@ func errorw(skip int, l *Logger, msg string, keysAndValues ...interface{}) {
 		return
 	}
 
+	callerInfo := getCallerInfo(skip + 1)
+	if !shouldOutput(msg, ErrorLevel, callerInfo) {
+		return
+	}
+
 	l.l.Errorw(msg, keysAndValues...)
 }
 
@@ -264,6 +297,11 @@ func (l *Logger) Errorw(msg string, keysAndValues ...interface{}) {
 // Fatal
 func fatalw(skip int, l *Logger, msg string, keysAndValues ...interface{}) {
 	if aggregateLog(skip+1, l, FatalLevel, msg) {
+		return
+	}
+
+	callerInfo := getCallerInfo(skip + 1)
+	if !shouldOutput(msg, FatalLevel, callerInfo) {
 		return
 	}
 
@@ -301,6 +339,12 @@ func SetLogger(l LoggerInterface) {
 	}
 
 	pkgLogger.l = l
+}
+
+// SetLevel sets package-level base logger level,
+// it is threadsafe
+func SetLevel(level Level) {
+	pkgLogger.cfg.SetLevel(level)
 }
 
 // Init sets the package-level base logger using given config

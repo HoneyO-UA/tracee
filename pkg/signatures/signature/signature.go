@@ -2,7 +2,7 @@ package signature
 
 import (
 	"bytes"
-	"fmt"
+	"debug/elf"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -11,33 +11,38 @@ import (
 
 	embedded "github.com/aquasecurity/tracee"
 	"github.com/aquasecurity/tracee/pkg/logger"
-	"github.com/aquasecurity/tracee/pkg/signatures/celsig"
 	"github.com/aquasecurity/tracee/pkg/signatures/regosig"
 	"github.com/aquasecurity/tracee/types/detect"
 )
 
-func Find(target string, partialEval bool, signaturesDir string, signatures []string, aioEnabled bool) ([]detect.Signature, error) {
-	if signaturesDir == "" {
+func Find(target string, partialEval bool, signaturesDir []string, signatures []string, aioEnabled bool) ([]detect.Signature, error) {
+	if len(signaturesDir) == 0 {
 		exePath, err := os.Executable()
 		if err != nil {
 			logger.Errorw("Getting executable path: " + err.Error())
 		}
-		signaturesDir = filepath.Join(filepath.Dir(exePath), "signatures")
+		signaturesDir = []string{filepath.Join(filepath.Dir(exePath), "signatures")}
 	}
-	gosigs, err := findGoSigs(signaturesDir)
-	if err != nil {
-		return nil, err
+	var sigs []detect.Signature
+
+	for _, dir := range signaturesDir {
+		if strings.TrimSpace(dir) == "" {
+			continue
+		}
+
+		gosigs, err := findGoSigs(dir)
+		if err != nil {
+			return nil, err
+		}
+
+		sigs = append(sigs, gosigs...)
+
+		opasigs, err := findRegoSigs(target, partialEval, dir, aioEnabled)
+		if err != nil {
+			return nil, err
+		}
+		sigs = append(sigs, opasigs...)
 	}
-	opasigs, err := findRegoSigs(target, partialEval, signaturesDir, aioEnabled)
-	if err != nil {
-		return nil, err
-	}
-	sigs := append(gosigs, opasigs...)
-	celsigs, err := celsig.NewSignaturesFromDir(signaturesDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed loading CEL signatures: %w", err)
-	}
-	sigs = append(sigs, celsigs...)
 
 	var res []detect.Signature
 	if signatures == nil {
@@ -57,6 +62,11 @@ func Find(target string, partialEval bool, signaturesDir string, signatures []st
 
 func findGoSigs(dir string) ([]detect.Signature, error) {
 	var res []detect.Signature
+
+	if isBinaryStatic() {
+		logger.Warnw("The tracee static can't load golang signatures. Skipping ...")
+		return res, nil
+	}
 
 	errWD := filepath.WalkDir(dir,
 		func(path string, d fs.DirEntry, err error) error {
@@ -187,4 +197,28 @@ func isRegoFile(name string) bool {
 
 func isHelper(name string) bool {
 	return strings.HasSuffix(name, "helpers.rego")
+}
+
+func isBinaryStatic() bool {
+	exePath, err := os.Executable()
+	if err != nil {
+		logger.Errorw("Error getting tracee executable path", "error", err)
+		return false
+	}
+
+	loadedObject, err := elf.Open(exePath)
+	if err != nil {
+		logger.Errorw("Error opening tracee executable", "error", err)
+		return false
+	}
+
+	defer func() {
+		if err = loadedObject.Close(); err != nil {
+			logger.Errorw("Error closing file", "error", err)
+		}
+	}()
+
+	_, err = loadedObject.DynamicSymbols()
+
+	return err != nil
 }

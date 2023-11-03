@@ -6,19 +6,28 @@
 
 #include <common/common.h>
 
-static __always_inline const char *get_cgroup_dirname(struct cgroup *cgrp)
+// PROTOTYPES
+
+statfunc const char *get_cgroup_dirname(struct cgroup *);
+statfunc const u64 get_cgroup_id(struct cgroup *);
+statfunc const u32 get_cgroup_hierarchy_id(struct cgroup *);
+statfunc const u64 get_cgroup_v1_subsys0_id(struct task_struct *);
+
+// FUNCTIONS
+
+statfunc const char *get_cgroup_dirname(struct cgroup *cgrp)
 {
-    struct kernfs_node *kn = READ_KERN(cgrp->kn);
+    struct kernfs_node *kn = BPF_CORE_READ(cgrp, kn);
 
     if (kn == NULL)
         return NULL;
 
-    return READ_KERN(kn->name);
+    return BPF_CORE_READ(kn, name);
 }
 
-static __always_inline const u64 get_cgroup_id(struct cgroup *cgrp)
+statfunc const u64 get_cgroup_id(struct cgroup *cgrp)
 {
-    struct kernfs_node *kn = READ_KERN(cgrp->kn);
+    struct kernfs_node *kn = BPF_CORE_READ(cgrp, kn);
 
     if (kn == NULL)
         return 0;
@@ -48,17 +57,17 @@ static __always_inline const u64 get_cgroup_id(struct cgroup *cgrp)
     return id;
 }
 
-static __always_inline const u32 get_cgroup_hierarchy_id(struct cgroup *cgrp)
+statfunc const u32 get_cgroup_hierarchy_id(struct cgroup *cgrp)
 {
-    struct cgroup_root *root = READ_KERN(cgrp->root);
-    return READ_KERN(root->hierarchy_id);
+    struct cgroup_root *root = BPF_CORE_READ(cgrp, root);
+    return BPF_CORE_READ(root, hierarchy_id);
 }
 
-static __always_inline const u64 get_cgroup_v1_subsys0_id(struct task_struct *task)
+statfunc const u64 get_cgroup_v1_subsys0_id(struct task_struct *task)
 {
-    struct css_set *cgroups = READ_KERN(task->cgroups);
-    struct cgroup_subsys_state *subsys0 = READ_KERN(cgroups->subsys[0]);
-    struct cgroup *cgroup = READ_KERN(subsys0->cgroup);
+    struct css_set *cgroups = BPF_CORE_READ(task, cgroups);
+    struct cgroup_subsys_state *subsys0 = BPF_CORE_READ(cgroups, subsys[0]);
+    struct cgroup *cgroup = BPF_CORE_READ(subsys0, cgroup);
     return get_cgroup_id(cgroup);
 }
 

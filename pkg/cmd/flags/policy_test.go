@@ -1,517 +1,757 @@
 package flags
 
 import (
-	"errors"
+	"fmt"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/aquasecurity/tracee/pkg/filters"
+	"github.com/aquasecurity/tracee/pkg/policy/v1beta1"
 )
 
-var writeFlag = &filterFlag{
-	full:              "event=write",
-	filterName:        "event",
-	operatorAndValues: "=write",
-	policyIdx:         0,
+var writeEvtFlag = eventFlag{
+	full:              "write",
+	eventName:         "write",
+	operatorAndValues: "",
 }
 
-var readFlag = &filterFlag{
-	full:              "event=read",
-	filterName:        "event",
-	operatorAndValues: "=read",
-	policyIdx:         0,
+var readEvtFlag = eventFlag{
+	full:              "read",
+	eventName:         "read",
+	operatorAndValues: "",
 }
 
-// newFilterFlagBasedOn returns a new filterFlag with the same values as the given
-// filterFlag, but with the given policy name.
-func newFilterFlagBasedOn(f *filterFlag, policyName string) *filterFlag {
-	return &filterFlag{
-		full:              f.full,
-		filterName:        f.filterName,
-		operatorAndValues: f.operatorAndValues,
-		policyIdx:         0,
-		policyName:        policyName,
-	}
-}
+func TestPrepareFilterMapsFromPolicies(t *testing.T) {
+	t.Parallel()
 
-func TestPolicyScopes(t *testing.T) {
+	description := map[string]string{"description": "this is a policy"}
 	tests := []struct {
 		testName           string
-		policy             PolicyFile
-		expected           FilterMap
+		policy             v1beta1.PolicyFile
+		expPolicyScopeMap  PolicyScopeMap
+		expPolicyEventMap  PolicyEventMap
 		skipPolicyCreation bool
 	}{
+		//
+		// scopes and events
+		//
 		{
 			testName: "global scope - single event",
-			policy: PolicyFile{
-				Name:          "global_scope_single_event",
-				Description:   "global scope - single event",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{Event: "write"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name:        "global-scope-single-event",
+					Annotations: description,
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{Event: "write"},
+					},
 				},
 			},
-			expected: FilterMap{
-				0: {newFilterFlagBasedOn(writeFlag, "global_scope_single_event")},
+			expPolicyScopeMap: PolicyScopeMap{
+				0: {
+					policyName: "global-scope-single-event",
+					scopeFlags: []scopeFlag{},
+				},
+			},
+			expPolicyEventMap: PolicyEventMap{
+				0: {
+					policyName: "global-scope-single-event",
+					eventFlags: []eventFlag{
+						writeEvtFlag,
+					},
+				},
 			},
 		},
 		{
 			testName: "global scope - multiple events",
-			policy: PolicyFile{
-				Name:          "global_scope_multiple_events",
-				Description:   "global scope - multiple events",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{Event: "write"},
-					{Event: "read"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "global-scope-multiple-events",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{Event: "write"},
+						{Event: "read"},
+					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{
 				0: {
-					newFilterFlagBasedOn(writeFlag, "global_scope_multiple_events"),
-					newFilterFlagBasedOn(readFlag, "global_scope_multiple_events"),
+					policyName: "global-scope-multiple-events",
+					scopeFlags: []scopeFlag{},
+				},
+			},
+			expPolicyEventMap: PolicyEventMap{
+				0: {
+					policyName: "global-scope-multiple-events",
+					eventFlags: []eventFlag{
+						writeEvtFlag,
+						readEvtFlag,
+					},
 				},
 			},
 		},
 		{
 			testName: "uid scope",
-			policy: PolicyFile{
-				Name:          "uid_scope",
-				Description:   "uid scope",
-				Scope:         []string{"uid>=1000"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{Event: "write"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "uid-scope",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"uid>=1000"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{Event: "write"},
+					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{
 				0: {
-					{
-						full:              "uid>=1000",
-						filterName:        "uid",
-						operatorAndValues: ">=1000",
-						policyIdx:         0,
-						policyName:        "uid_scope",
+					policyName: "uid-scope",
+					scopeFlags: []scopeFlag{
+						{
+							full:              "uid>=1000",
+							scopeName:         "uid",
+							operator:          ">=",
+							values:            "1000",
+							operatorAndValues: ">=1000",
+						},
 					},
-					newFilterFlagBasedOn(writeFlag, "uid_scope"),
+				},
+			},
+			expPolicyEventMap: PolicyEventMap{
+				0: {
+					policyName: "uid-scope",
+					eventFlags: []eventFlag{
+						writeEvtFlag,
+					},
 				},
 			},
 		},
 		{
 			testName: "pid scope",
-			policy: PolicyFile{
-				Name:          "pid_scope",
-				Description:   "pid scope",
-				Scope:         []string{"pid<=10"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{Event: "write"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "pid-scope",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"pid<=10"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{Event: "write"},
+					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{
 				0: {
-					{
-						full:              "pid<=10",
-						filterName:        "pid",
-						operatorAndValues: "<=10",
-						policyIdx:         0,
-						policyName:        "pid_scope",
+					policyName: "pid-scope",
+					scopeFlags: []scopeFlag{
+						{
+							full:              "pid<=10",
+							scopeName:         "pid",
+							operator:          "<=",
+							values:            "10",
+							operatorAndValues: "<=10",
+						},
 					},
-					newFilterFlagBasedOn(writeFlag, "pid_scope"),
+				},
+			},
+			expPolicyEventMap: PolicyEventMap{
+				0: {
+					policyName: "pid-scope",
+					eventFlags: []eventFlag{
+						writeEvtFlag,
+					},
 				},
 			},
 		},
 		{
 			testName: "mntns scope",
-			policy: PolicyFile{
-				Name:          "mntns",
-				Description:   "mntns scope",
-				Scope:         []string{"mntns=4026531840"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{Event: "write"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "mntns",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"mntns=4026531840"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{Event: "write"},
+					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{
 				0: {
-					{
-						full:              "mntns=4026531840",
-						filterName:        "mntns",
-						operatorAndValues: "=4026531840",
-						policyIdx:         0,
-						policyName:        "mntns",
+					policyName: "mntns",
+					scopeFlags: []scopeFlag{
+						{
+							full:              "mntns=4026531840",
+							scopeName:         "mntns",
+							operator:          "=",
+							values:            "4026531840",
+							operatorAndValues: "=4026531840",
+						},
 					},
-					newFilterFlagBasedOn(writeFlag, "mntns"),
+				},
+			},
+			expPolicyEventMap: PolicyEventMap{
+				0: {
+					policyName: "mntns",
+					eventFlags: []eventFlag{
+						writeEvtFlag,
+					},
 				},
 			},
 		},
 		{
 			testName: "pidns scope",
-			policy: PolicyFile{
-				Name:          "pidns_scope",
-				Description:   "pidns scope",
-				Scope:         []string{"pidns!=4026531836"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{Event: "write"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "pidns-scope",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"pidns!=4026531836"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{Event: "write"},
+					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{
 				0: {
-					{
-						full:              "pidns!=4026531836",
-						filterName:        "pidns",
-						operatorAndValues: "!=4026531836",
-						policyIdx:         0,
-						policyName:        "pidns_scope",
+					policyName: "pidns-scope",
+					scopeFlags: []scopeFlag{
+						{
+							full:              "pidns!=4026531836",
+							scopeName:         "pidns",
+							operator:          "!=",
+							values:            "4026531836",
+							operatorAndValues: "!=4026531836",
+						},
 					},
-					newFilterFlagBasedOn(writeFlag, "pidns_scope"),
+				},
+			},
+			expPolicyEventMap: PolicyEventMap{
+				0: {
+					policyName: "pidns-scope",
+					eventFlags: []eventFlag{
+						writeEvtFlag,
+					},
 				},
 			},
 		},
 		{
 			testName: "uts scope",
-			policy: PolicyFile{
-				Name:          "uts_scope",
-				Description:   "uts scope",
-				Scope:         []string{"uts!=ab356bc4dd554"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{Event: "write"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "uts-scope",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"uts!=ab356bc4dd554"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{Event: "write"},
+					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{
 				0: {
-					{
-						full:              "uts!=ab356bc4dd554",
-						filterName:        "uts",
-						operatorAndValues: "!=ab356bc4dd554",
-						policyIdx:         0,
-						policyName:        "uts_scope",
+					policyName: "uts-scope",
+					scopeFlags: []scopeFlag{
+						{
+							full:              "uts!=ab356bc4dd554",
+							scopeName:         "uts",
+							operator:          "!=",
+							values:            "ab356bc4dd554",
+							operatorAndValues: "!=ab356bc4dd554",
+						},
 					},
-					newFilterFlagBasedOn(writeFlag, "uts_scope"),
+				},
+			},
+			expPolicyEventMap: PolicyEventMap{
+				0: {
+					policyName: "uts-scope",
+					eventFlags: []eventFlag{
+						writeEvtFlag,
+					},
 				},
 			},
 		},
 		{
 			testName: "comm=bash",
-			policy: PolicyFile{
-				Name:          "comm_scope",
-				Description:   "comm scope",
-				Scope:         []string{"comm=bash"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{Event: "write"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "comm-scope",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"comm=bash"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{Event: "write"},
+					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{
 				0: {
-					{
-						full:              "comm=bash",
-						filterName:        "comm",
-						operatorAndValues: "=bash",
-						policyIdx:         0,
-						policyName:        "comm_scope",
+					policyName: "comm-scope",
+					scopeFlags: []scopeFlag{
+						{
+							full:              "comm=bash",
+							scopeName:         "comm",
+							operator:          "=",
+							values:            "bash",
+							operatorAndValues: "=bash",
+						},
 					},
-					newFilterFlagBasedOn(writeFlag, "comm_scope"),
+				},
+			},
+			expPolicyEventMap: PolicyEventMap{
+				0: {
+					policyName: "comm-scope",
+					eventFlags: []eventFlag{
+						writeEvtFlag,
+					},
 				},
 			},
 		},
 		{
 			testName: "container=new",
-			policy: PolicyFile{
-				Name:          "container_scope",
-				Description:   "container scope",
-				Scope:         []string{"container=new"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{Event: "write"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "container-scope",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"container=new"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{Event: "write"},
+					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{
 				0: {
-					{
-						full:              "container=new",
-						filterName:        "container",
-						operatorAndValues: "=new",
-						policyIdx:         0,
-						policyName:        "container_scope",
+					policyName: "container-scope",
+					scopeFlags: []scopeFlag{
+						{
+							full:              "container=new",
+							scopeName:         "container",
+							operator:          "=",
+							values:            "new",
+							operatorAndValues: "=new",
+						},
 					},
-					newFilterFlagBasedOn(writeFlag, "container_scope"),
+				},
+			},
+			expPolicyEventMap: PolicyEventMap{
+				0: {
+					policyName: "container-scope",
+					eventFlags: []eventFlag{
+						writeEvtFlag,
+					},
 				},
 			},
 		},
 		{
-			testName: "!container",
-			policy: PolicyFile{
-				Name:          "!container_scope",
-				Description:   "!container scope",
-				Scope:         []string{"!container"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{Event: "write"},
+			testName: "not-container",
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "not-container-scope",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"not-container"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{Event: "write"},
+					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{
 				0: {
-					{
-						full:              "!container",
-						filterName:        "!container",
-						operatorAndValues: "",
-						policyIdx:         0,
-						policyName:        "!container_scope",
+					policyName: "not-container-scope",
+					scopeFlags: []scopeFlag{
+						{
+							full:              "not-container",
+							scopeName:         "container",
+							operator:          "not",
+							values:            "",
+							operatorAndValues: "",
+						},
 					},
-					newFilterFlagBasedOn(writeFlag, "!container_scope"),
+				},
+			},
+			expPolicyEventMap: PolicyEventMap{
+				0: {
+					policyName: "not-container-scope",
+					eventFlags: []eventFlag{
+						writeEvtFlag,
+					},
 				},
 			},
 		},
 		{
 			testName: "container",
-			policy: PolicyFile{
-				Name:          "container_scope",
-				Description:   "container scope",
-				Scope:         []string{"container"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{Event: "write"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "container-scope",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"container"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{Event: "write"},
+					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{
 				0: {
-					{
-						full:              "container",
-						filterName:        "container",
-						operatorAndValues: "",
-						policyIdx:         0,
-						policyName:        "container_scope",
+					policyName: "container-scope",
+					scopeFlags: []scopeFlag{
+						{
+							full:              "container",
+							scopeName:         "container",
+							operator:          "",
+							values:            "",
+							operatorAndValues: "",
+						},
 					},
-					newFilterFlagBasedOn(writeFlag, "container_scope"),
+				},
+			},
+			expPolicyEventMap: PolicyEventMap{
+				0: {
+					policyName: "container-scope",
+					eventFlags: []eventFlag{
+						writeEvtFlag,
+					},
 				},
 			},
 		},
 		{
 			testName: "tree=3213,5200",
-			policy: PolicyFile{
-				Name:          "tree_scope",
-				Description:   "tree scope",
-				Scope:         []string{"tree=3213,5200"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{Event: "write"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "tree-scope",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"tree=3213,5200"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{Event: "write"},
+					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{
 				0: {
-					{
-						full:              "tree=3213,5200",
-						filterName:        "tree",
-						operatorAndValues: "=3213,5200",
-						policyIdx:         0,
-						policyName:        "tree_scope",
+					policyName: "tree-scope",
+					scopeFlags: []scopeFlag{
+						{
+							full:              "tree=3213,5200",
+							scopeName:         "tree",
+							operator:          "=",
+							values:            "3213,5200",
+							operatorAndValues: "=3213,5200",
+						},
 					},
-					newFilterFlagBasedOn(writeFlag, "tree_scope"),
+				},
+			},
+			expPolicyEventMap: PolicyEventMap{
+				0: {
+					policyName: "tree-scope",
+					eventFlags: []eventFlag{
+						writeEvtFlag,
+					},
 				},
 			},
 		},
 		{
 			testName: "scope with space",
-			policy: PolicyFile{
-				Name:          "scope_with_space",
-				Description:   "scope with space",
-				Scope:         []string{"tree = 3213"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{Event: "write"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "scope-with-space",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"tree = 3213"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{Event: "write"},
+					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{
 				0: {
-					{
-						full:              "tree=3213",
-						filterName:        "tree",
-						operatorAndValues: "=3213",
-						policyIdx:         0,
-						policyName:        "scope_with_space",
+					policyName: "scope-with-space",
+					scopeFlags: []scopeFlag{
+						{
+							full:              "tree=3213",
+							scopeName:         "tree",
+							operator:          "=",
+							values:            "3213",
+							operatorAndValues: "=3213",
+						},
 					},
-					newFilterFlagBasedOn(writeFlag, "scope_with_space"),
+				},
+			},
+			expPolicyEventMap: PolicyEventMap{
+				0: {
+					policyName: "scope-with-space",
+					eventFlags: []eventFlag{
+						writeEvtFlag,
+					},
 				},
 			},
 		},
 		{
-			testName: "binary=host:/usr/bin/ls",
-			policy: PolicyFile{
-				Name:          "binary_scope",
-				Description:   "binary scope",
-				Scope:         []string{"binary=host:/usr/bin/ls"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{Event: "write"},
+			testName: "executable=host:/usr/bin/ls",
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "executable-scope",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"executable=host:/usr/bin/ls"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{Event: "write"},
+					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{
 				0: {
-					{
-						full:              "binary=host:/usr/bin/ls",
-						filterName:        "binary",
-						operatorAndValues: "=host:/usr/bin/ls",
-						policyIdx:         0,
-						policyName:        "binary_scope",
+					policyName: "executable-scope",
+					scopeFlags: []scopeFlag{
+						{
+							full:              "executable=host:/usr/bin/ls",
+							scopeName:         "executable",
+							operator:          "=",
+							values:            "host:/usr/bin/ls",
+							operatorAndValues: "=host:/usr/bin/ls",
+						},
 					},
-					newFilterFlagBasedOn(writeFlag, "binary_scope"),
+				},
+			},
+			expPolicyEventMap: PolicyEventMap{
+				0: {
+					policyName: "executable-scope",
+					eventFlags: []eventFlag{
+						writeEvtFlag,
+					},
 				},
 			},
 			skipPolicyCreation: true, // needs root privileges
 		},
 		{
-			testName: "bin=4026532448:/usr/bin/ls",
-			policy: PolicyFile{
-				Name:          "bin_scope",
-				Description:   "bin scope",
-				Scope:         []string{"bin=4026532448:/usr/bin/ls"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{Event: "write"},
+			testName: "exec=4026532448:/usr/bin/ls",
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "exec-scope",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"exec=4026532448:/usr/bin/ls"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{Event: "write"},
+					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{
 				0: {
-					{
-						full:              "bin=4026532448:/usr/bin/ls",
-						filterName:        "bin",
-						operatorAndValues: "=4026532448:/usr/bin/ls",
-						policyIdx:         0,
-						policyName:        "bin_scope",
+					policyName: "exec-scope",
+					scopeFlags: []scopeFlag{
+						{
+							full:              "exec=4026532448:/usr/bin/ls",
+							scopeName:         "exec",
+							operator:          "=",
+							values:            "4026532448:/usr/bin/ls",
+							operatorAndValues: "=4026532448:/usr/bin/ls",
+						},
 					},
-					newFilterFlagBasedOn(writeFlag, "bin_scope"),
+				},
+			},
+			expPolicyEventMap: PolicyEventMap{
+				0: {
+					policyName: "exec-scope",
+					eventFlags: []eventFlag{
+						writeEvtFlag,
+					},
+				},
+			},
+		},
+		{
+			testName: "bin=4026532448:/usr/bin/ls",
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "exec-scope (bin alias)",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"bin=4026532448:/usr/bin/ls"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{Event: "write"},
+					},
+				},
+			},
+			expPolicyScopeMap: PolicyScopeMap{
+				0: {
+					policyName: "exec-scope (bin alias)",
+					scopeFlags: []scopeFlag{
+						{
+							full:              "bin=4026532448:/usr/bin/ls",
+							scopeName:         "bin",
+							operator:          "=",
+							values:            "4026532448:/usr/bin/ls",
+							operatorAndValues: "=4026532448:/usr/bin/ls",
+						},
+					},
+				},
+			},
+			expPolicyEventMap: PolicyEventMap{
+				0: {
+					policyName: "exec-scope (bin alias)",
+					eventFlags: []eventFlag{
+						writeEvtFlag,
+					},
 				},
 			},
 		},
 		{
 			testName: "follow",
-			policy: PolicyFile{
-				Name:          "follow_scope",
-				Description:   "follow scope",
-				Scope:         []string{"follow"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{Event: "write"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "follow-scope",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"follow"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{Event: "write"},
+					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{
 				0: {
-					{
-						full:              "follow",
-						filterName:        "follow",
-						operatorAndValues: "",
-						policyIdx:         0,
-						policyName:        "follow_scope",
+					policyName: "follow-scope",
+					scopeFlags: []scopeFlag{
+						{
+							full:              "follow",
+							scopeName:         "follow",
+							operator:          "",
+							values:            "",
+							operatorAndValues: "",
+						},
 					},
-					newFilterFlagBasedOn(writeFlag, "follow_scope"),
+				},
+			},
+			expPolicyEventMap: PolicyEventMap{
+				0: {
+					policyName: "follow-scope",
+					eventFlags: []eventFlag{
+						writeEvtFlag,
+					},
 				},
 			},
 		},
 		{
 			testName: "multiple scopes",
-			policy: PolicyFile{
-				Name:          "multiple_scope",
-				Description:   "multiple scope",
-				Scope:         []string{"comm=bash", "follow", "!container", "uid=1000"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{Event: "write"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "multiple-scope",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"comm=bash", "follow", "not-container", "uid=1000"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{Event: "write"},
+					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{
 				0: {
-					{
-						full:              "comm=bash",
-						filterName:        "comm",
-						operatorAndValues: "=bash",
-						policyIdx:         0,
-						policyName:        "multiple_scope",
+					policyName: "multiple-scope",
+					scopeFlags: []scopeFlag{
+						{
+							full:              "comm=bash",
+							scopeName:         "comm",
+							operator:          "=",
+							values:            "bash",
+							operatorAndValues: "=bash",
+						},
+						{
+							full:              "follow",
+							scopeName:         "follow",
+							operator:          "",
+							values:            "",
+							operatorAndValues: "",
+						},
+						{
+							full:              "not-container",
+							scopeName:         "container",
+							operator:          "not",
+							values:            "",
+							operatorAndValues: "",
+						},
+						{
+							full:              "uid=1000",
+							scopeName:         "uid",
+							operator:          "=",
+							values:            "1000",
+							operatorAndValues: "=1000",
+						},
 					},
-					{
-						full:              "follow",
-						filterName:        "follow",
-						operatorAndValues: "",
-						policyIdx:         0,
-						policyName:        "multiple_scope",
+				},
+			},
+			expPolicyEventMap: PolicyEventMap{
+				0: {
+					policyName: "multiple-scope",
+					eventFlags: []eventFlag{
+						writeEvtFlag,
 					},
-					{
-						full:              "!container",
-						filterName:        "!container",
-						operatorAndValues: "",
-						policyIdx:         0,
-						policyName:        "multiple_scope",
-					},
-					{
-						full:              "uid=1000",
-						filterName:        "uid",
-						operatorAndValues: "=1000",
-						policyIdx:         0,
-						policyName:        "multiple_scope",
-					},
-					newFilterFlagBasedOn(writeFlag, "multiple_scope"),
 				},
 			},
 		},
-	}
 
-	for _, test := range tests {
-		t.Run(test.testName, func(t *testing.T) {
-			filterMap, err := PrepareFilterMapFromPolicies([]PolicyFile{test.policy})
-			assert.NoError(t, err)
+		//
+		// events
+		//
 
-			for k, v := range test.expected {
-				assert.Equal(t, v, filterMap[k])
-			}
-
-			if !test.skipPolicyCreation {
-				p, err := CreatePolicies(filterMap, false)
-				assert.NotNil(t, p)
-				assert.NoError(t, err)
-			}
-		})
-	}
-}
-
-func TestPolicyEventFilter(t *testing.T) {
-	tests := []struct {
-		testName string
-		policy   PolicyFile
-		expected FilterMap
-	}{
 		// args filter
 		{
 			testName: "args filter",
-			policy: PolicyFile{
-				Name:          "args_filter",
-				Description:   "args filter",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{
-						Event:  "security_file_open",
-						Filter: []string{"args.pathname=/etc/passwd"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "args-filter",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{
+							Event:   "security_file_open",
+							Filters: []string{"args.pathname=/etc/passwd"},
+						},
 					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{},
+			expPolicyEventMap: PolicyEventMap{
 				0: {
-					{
-						full:              "event=security_file_open",
-						filterName:        "event",
-						operatorAndValues: "=security_file_open",
-						policyIdx:         0,
-						policyName:        "args_filter",
-					},
-					{
-						full:              "security_file_open.args.pathname=/etc/passwd",
-						filterName:        "security_file_open.args.pathname",
-						operatorAndValues: "=/etc/passwd",
-						policyIdx:         0,
-						policyName:        "args_filter",
+					policyName: "args-filter",
+					eventFlags: []eventFlag{
+						{
+							full:              "security_file_open",
+							eventName:         "security_file_open",
+							operatorAndValues: "",
+						},
+						{
+							full:              "security_file_open.args.pathname=/etc/passwd",
+							eventName:         "security_file_open",
+							eventFilter:       "security_file_open.args.pathname",
+							operatorAndValues: "=/etc/passwd",
+						},
 					},
 				},
 			},
@@ -519,27 +759,33 @@ func TestPolicyEventFilter(t *testing.T) {
 		// return filter
 		{
 			testName: "return filter",
-			policy: PolicyFile{
-				Name:          "return_filter",
-				Description:   "return filter",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{
-						Event:  "write",
-						Filter: []string{"retval=-1"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "return-filter",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{
+							Event:   "write",
+							Filters: []string{"retval=-1"},
+						},
 					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{},
+			expPolicyEventMap: PolicyEventMap{
 				0: {
-					newFilterFlagBasedOn(writeFlag, "return_filter"),
-					{
-						full:              "write.retval=-1",
-						filterName:        "write.retval",
-						operatorAndValues: "=-1",
-						policyIdx:         0,
-						policyName:        "return_filter",
+					policyName: "return-filter",
+					eventFlags: []eventFlag{
+						writeEvtFlag,
+						{
+							full:              "write.retval=-1",
+							eventName:         "write",
+							eventFilter:       "write.retval",
+							operatorAndValues: "=-1",
+						},
 					},
 				},
 			},
@@ -547,810 +793,990 @@ func TestPolicyEventFilter(t *testing.T) {
 		// context filter
 		{
 			testName: "timestamp filter",
-			policy: PolicyFile{
-				Name:          "timestamp_filter",
-				Description:   "timestamp filter",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{
-						Event:  "write",
-						Filter: []string{"timestamp>1234567890"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "timestamp-filter",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{
+							Event:   "write",
+							Filters: []string{"timestamp>1234567890"},
+						},
 					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{},
+			expPolicyEventMap: PolicyEventMap{
 				0: {
-					newFilterFlagBasedOn(writeFlag, "timestamp_filter"),
-					{
-						full:              "write.context.timestamp>1234567890",
-						filterName:        "write.context.timestamp",
-						operatorAndValues: ">1234567890",
-						policyIdx:         0,
-						policyName:        "timestamp_filter",
+					policyName: "timestamp-filter",
+					eventFlags: []eventFlag{
+						writeEvtFlag,
+						{
+							full:              "write.context.timestamp>1234567890",
+							eventName:         "write",
+							eventFilter:       "write.context.timestamp",
+							operatorAndValues: ">1234567890",
+						},
 					},
 				},
 			},
 		},
 		{
 			testName: "processorId filter",
-			policy: PolicyFile{
-				Name:          "processorId_filter",
-				Description:   "processorId filter",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{
-						Event:  "write",
-						Filter: []string{"processorId>=1234567890"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "processorId-filter",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{
+							Event:   "write",
+							Filters: []string{"processorId>=1234567890"},
+						},
 					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{},
+			expPolicyEventMap: PolicyEventMap{
 				0: {
-					newFilterFlagBasedOn(writeFlag, "processorId_filter"),
-					{
-						full:              "write.context.processorId>=1234567890",
-						filterName:        "write.context.processorId",
-						operatorAndValues: ">=1234567890",
-						policyIdx:         0,
-						policyName:        "processorId_filter",
+					policyName: "processorId-filter",
+					eventFlags: []eventFlag{
+						writeEvtFlag,
+						{
+							full:              "write.context.processorId>=1234567890",
+							eventName:         "write",
+							eventFilter:       "write.context.processorId",
+							operatorAndValues: ">=1234567890",
+						},
 					},
 				},
 			},
 		},
 		{
 			testName: "p filter",
-			policy: PolicyFile{
-				Name:          "p_filter",
-				Description:   "p filter",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{
-						Event:  "write",
-						Filter: []string{"p<=10"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "p-filter",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{
+							Event:   "write",
+							Filters: []string{"p<=10"},
+						},
 					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{},
+			expPolicyEventMap: PolicyEventMap{
 				0: {
-					newFilterFlagBasedOn(writeFlag, "p_filter"),
-					{
-						full:              "write.context.p<=10",
-						filterName:        "write.context.p",
-						operatorAndValues: "<=10",
-						policyIdx:         0,
-						policyName:        "p_filter",
+					policyName: "p-filter",
+					eventFlags: []eventFlag{
+						writeEvtFlag,
+						{
+							full:              "write.context.p<=10",
+							eventName:         "write",
+							eventFilter:       "write.context.p",
+							operatorAndValues: "<=10",
+						},
 					},
 				},
 			},
 		},
 		{
 			testName: "pid filter",
-			policy: PolicyFile{
-				Name:          "pid_filter",
-				Description:   "pid filter",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{
-						Event:  "write",
-						Filter: []string{"pid!=1"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "pid-filter",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{
+							Event:   "write",
+							Filters: []string{"pid!=1"},
+						},
 					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{},
+			expPolicyEventMap: PolicyEventMap{
 				0: {
-					newFilterFlagBasedOn(writeFlag, "pid_filter"),
-					{
-						full:              "write.context.pid!=1",
-						filterName:        "write.context.pid",
-						operatorAndValues: "!=1",
-						policyIdx:         0,
-						policyName:        "pid_filter",
+					policyName: "pid-filter",
+					eventFlags: []eventFlag{
+						writeEvtFlag,
+						{
+							full:              "write.context.pid!=1",
+							eventName:         "write",
+							eventFilter:       "write.context.pid",
+							operatorAndValues: "!=1",
+						},
 					},
 				},
 			},
 		},
 		{
 			testName: "processId filter",
-			policy: PolicyFile{
-				Name:          "processId_filter",
-				Description:   "processId filter",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{
-						Event:  "write",
-						Filter: []string{"processId=1387"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "processId-filter",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{
+							Event:   "write",
+							Filters: []string{"processId=1387"},
+						},
 					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{},
+			expPolicyEventMap: PolicyEventMap{
 				0: {
-					newFilterFlagBasedOn(writeFlag, "processId_filter"),
-					{
-						full:              "write.context.processId=1387",
-						filterName:        "write.context.processId",
-						operatorAndValues: "=1387",
-						policyIdx:         0,
-						policyName:        "processId_filter",
+					policyName: "processId-filter",
+					eventFlags: []eventFlag{
+						writeEvtFlag,
+						{
+							full:              "write.context.processId=1387",
+							eventName:         "write",
+							eventFilter:       "write.context.processId",
+							operatorAndValues: "=1387",
+						},
 					},
 				},
 			},
 		},
 		{
 			testName: "tid filter",
-			policy: PolicyFile{
-				Name:          "tid_filter",
-				Description:   "tid filter",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{
-						Event:  "write",
-						Filter: []string{"tid=1388"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "tid-filter",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{
+							Event:   "write",
+							Filters: []string{"tid=1388"},
+						},
 					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{},
+			expPolicyEventMap: PolicyEventMap{
 				0: {
-					newFilterFlagBasedOn(writeFlag, "tid_filter"),
-					{
-						full:              "write.context.tid=1388",
-						filterName:        "write.context.tid",
-						operatorAndValues: "=1388",
-						policyIdx:         0,
-						policyName:        "tid_filter",
+					policyName: "tid-filter",
+					eventFlags: []eventFlag{
+						writeEvtFlag,
+						{
+							full:              "write.context.tid=1388",
+							eventName:         "write",
+							eventFilter:       "write.context.tid",
+							operatorAndValues: "=1388",
+						},
 					},
 				},
 			},
 		},
 		{
 			testName: "threadId filter",
-			policy: PolicyFile{
-				Name:          "threadId_filter",
-				Description:   "threadId filter",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{
-						Event:  "write",
-						Filter: []string{"threadId!=1388"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "threadId-filter",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{
+							Event:   "write",
+							Filters: []string{"threadId!=1388"},
+						},
 					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{},
+			expPolicyEventMap: PolicyEventMap{
 				0: {
-					newFilterFlagBasedOn(writeFlag, "threadId_filter"),
-					{
-						full:              "write.context.threadId!=1388",
-						filterName:        "write.context.threadId",
-						operatorAndValues: "!=1388",
-						policyIdx:         0,
-						policyName:        "threadId_filter",
+					policyName: "threadId-filter",
+					eventFlags: []eventFlag{
+						writeEvtFlag,
+						{
+							full:              "write.context.threadId!=1388",
+							eventName:         "write",
+							eventFilter:       "write.context.threadId",
+							operatorAndValues: "!=1388",
+						},
 					},
 				},
 			},
 		},
 		{
 			testName: "ppid filter",
-			policy: PolicyFile{
-				Name:          "ppid_filter",
-				Description:   "ppid filter",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{
-						Event:  "write",
-						Filter: []string{"ppid=1"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "ppid_filter",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{
+							Event:   "write",
+							Filters: []string{"ppid=1"},
+						},
 					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{},
+			expPolicyEventMap: PolicyEventMap{
 				0: {
-					newFilterFlagBasedOn(writeFlag, "ppid_filter"),
-					{
-						full:              "write.context.ppid=1",
-						filterName:        "write.context.ppid",
-						operatorAndValues: "=1",
-						policyIdx:         0,
-						policyName:        "ppid_filter",
+					policyName: "ppid_filter",
+					eventFlags: []eventFlag{
+						writeEvtFlag,
+						{
+							full:              "write.context.ppid=1",
+							eventName:         "write",
+							eventFilter:       "write.context.ppid",
+							operatorAndValues: "=1",
+						},
 					},
 				},
 			},
 		},
 		{
 			testName: "parentProcessId filter",
-			policy: PolicyFile{
-				Name:          "parentProcessId_filter",
-				Description:   "parentProcessId filter",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{
-						Event:  "write",
-						Filter: []string{"parentProcessId>1455"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "parentProcessId-filter",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{
+							Event:   "write",
+							Filters: []string{"parentProcessId>1455"},
+						},
 					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{},
+			expPolicyEventMap: PolicyEventMap{
 				0: {
-					newFilterFlagBasedOn(writeFlag, "parentProcessId_filter"),
-					{
-						full:              "write.context.parentProcessId>1455",
-						filterName:        "write.context.parentProcessId",
-						operatorAndValues: ">1455",
-						policyIdx:         0,
-						policyName:        "parentProcessId_filter",
+					policyName: "parentProcessId-filter",
+					eventFlags: []eventFlag{
+						writeEvtFlag,
+						{
+							full:              "write.context.parentProcessId>1455",
+							eventName:         "write",
+							eventFilter:       "write.context.parentProcessId",
+							operatorAndValues: ">1455",
+						},
 					},
 				},
 			},
 		},
 		{
 			testName: "hostTid filter",
-			policy: PolicyFile{
-				Name:          "hostTid_filter",
-				Description:   "hostTid filter",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{
-						Event:  "read",
-						Filter: []string{"hostTid=2455"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "hostTid-filter",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{
+							Event:   "read",
+							Filters: []string{"hostTid=2455"},
+						},
 					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{},
+			expPolicyEventMap: PolicyEventMap{
 				0: {
-					newFilterFlagBasedOn(readFlag, "hostTid_filter"),
-					{
-						full:              "read.context.hostTid=2455",
-						filterName:        "read.context.hostTid",
-						operatorAndValues: "=2455",
-						policyIdx:         0,
-						policyName:        "hostTid_filter",
+					policyName: "hostTid-filter",
+					eventFlags: []eventFlag{
+						readEvtFlag,
+						{
+							full:              "read.context.hostTid=2455",
+							eventName:         "read",
+							eventFilter:       "read.context.hostTid",
+							operatorAndValues: "=2455",
+						},
 					},
 				},
 			},
 		},
 		{
 			testName: "hostThreadId filter",
-			policy: PolicyFile{
-				Name:          "hostThreadId_filter",
-				Description:   "hostThreadId filter",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{
-						Event:  "read",
-						Filter: []string{"hostThreadId!=2455"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "hostThreadId-filter",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{
+							Event:   "read",
+							Filters: []string{"hostThreadId!=2455"},
+						},
 					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{},
+			expPolicyEventMap: PolicyEventMap{
 				0: {
-					newFilterFlagBasedOn(readFlag, "hostThreadId_filter"),
-					{
-						full:              "read.context.hostThreadId!=2455",
-						filterName:        "read.context.hostThreadId",
-						operatorAndValues: "!=2455",
-						policyIdx:         0,
-						policyName:        "hostThreadId_filter",
+					policyName: "hostThreadId-filter",
+					eventFlags: []eventFlag{
+						readEvtFlag,
+						{
+							full:              "read.context.hostThreadId!=2455",
+							eventName:         "read",
+							eventFilter:       "read.context.hostThreadId",
+							operatorAndValues: "!=2455",
+						},
 					},
 				},
 			},
 		},
 		{
 			testName: "hostPid filter",
-			policy: PolicyFile{
-				Name:          "hostPid_filter",
-				Description:   "hostPid filter",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{
-						Event:  "read",
-						Filter: []string{"hostPid=333"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "hostPid-filter",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{
+							Event:   "read",
+							Filters: []string{"hostPid=333"},
+						},
 					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{},
+			expPolicyEventMap: PolicyEventMap{
 				0: {
-					newFilterFlagBasedOn(readFlag, "hostPid_filter"),
-					{
-						full:              "read.context.hostPid=333",
-						filterName:        "read.context.hostPid",
-						operatorAndValues: "=333",
-						policyIdx:         0,
-						policyName:        "hostPid_filter",
+					policyName: "hostPid-filter",
+					eventFlags: []eventFlag{
+						readEvtFlag,
+						{
+							full:              "read.context.hostPid=333",
+							eventName:         "read",
+							eventFilter:       "read.context.hostPid",
+							operatorAndValues: "=333",
+						},
 					},
 				},
 			},
 		},
 		{
 			testName: "hostParentProcessID filter",
-			policy: PolicyFile{
-				Name:          "hostParentProcessId_filter",
-				Description:   "hostParentProcessId filter",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{
-						Event:  "read",
-						Filter: []string{"hostParentProcessId!=333"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "hostParentProcessId-filter",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{
+							Event:   "read",
+							Filters: []string{"hostParentProcessId!=333"},
+						},
 					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{},
+			expPolicyEventMap: PolicyEventMap{
 				0: {
-					newFilterFlagBasedOn(readFlag, "hostParentProcessId_filter"),
-					{
-						full:              "read.context.hostParentProcessId!=333",
-						filterName:        "read.context.hostParentProcessId",
-						operatorAndValues: "!=333",
-						policyIdx:         0,
-						policyName:        "hostParentProcessId_filter",
+					policyName: "hostParentProcessId-filter",
+					eventFlags: []eventFlag{
+						readEvtFlag,
+						{
+							full:              "read.context.hostParentProcessId!=333",
+							eventName:         "read",
+							eventFilter:       "read.context.hostParentProcessId",
+							operatorAndValues: "!=333",
+						},
 					},
 				},
 			},
 		},
 		{
 			testName: "userId filter",
-			policy: PolicyFile{
-				Name:          "userId_filter",
-				Description:   "userId filter",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{
-						Event:  "read",
-						Filter: []string{"userId=1000"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "userId-filter",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{
+							Event:   "read",
+							Filters: []string{"userId=1000"},
+						},
 					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{},
+			expPolicyEventMap: PolicyEventMap{
 				0: {
-					newFilterFlagBasedOn(readFlag, "userId_filter"),
-					{
-						full:              "read.context.userId=1000",
-						filterName:        "read.context.userId",
-						operatorAndValues: "=1000",
-						policyIdx:         0,
-						policyName:        "userId_filter",
+					policyName: "userId-filter",
+					eventFlags: []eventFlag{
+						readEvtFlag,
+						{
+							full:              "read.context.userId=1000",
+							eventName:         "read",
+							eventFilter:       "read.context.userId",
+							operatorAndValues: "=1000",
+						},
 					},
 				},
 			},
 		},
 		{
 			testName: "mntns filter",
-			policy: PolicyFile{
-				Name:          "mntns_filter",
-				Description:   "mntns filter",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{
-						Event:  "read",
-						Filter: []string{"mntns=4026531840"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "mntns-filter",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{
+							Event:   "read",
+							Filters: []string{"mntns=4026531840"},
+						},
 					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{},
+			expPolicyEventMap: PolicyEventMap{
 				0: {
-					newFilterFlagBasedOn(readFlag, "mntns_filter"),
-					{
-						full:              "read.context.mntns=4026531840",
-						filterName:        "read.context.mntns",
-						operatorAndValues: "=4026531840",
-						policyIdx:         0,
-						policyName:        "mntns_filter",
+					policyName: "mntns-filter",
+					eventFlags: []eventFlag{
+						readEvtFlag,
+						{
+							full:              "read.context.mntns=4026531840",
+							eventName:         "read",
+							eventFilter:       "read.context.mntns",
+							operatorAndValues: "=4026531840",
+						},
 					},
 				},
 			},
 		},
 		{
 			testName: "mountNamespace filter",
-			policy: PolicyFile{
-				Name:          "mountNamespace_filter",
-				Description:   "mountNamespace filter",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{
-						Event:  "read",
-						Filter: []string{"mountNamespace!=4026531840"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "mountNamespace-filter",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{
+							Event:   "read",
+							Filters: []string{"mountNamespace!=4026531840"},
+						},
 					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{},
+			expPolicyEventMap: PolicyEventMap{
 				0: {
-					newFilterFlagBasedOn(readFlag, "mountNamespace_filter"),
-					{
-						full:              "read.context.mountNamespace!=4026531840",
-						filterName:        "read.context.mountNamespace",
-						operatorAndValues: "!=4026531840",
-						policyIdx:         0,
-						policyName:        "mountNamespace_filter",
+					policyName: "mountNamespace-filter",
+					eventFlags: []eventFlag{
+						readEvtFlag,
+						{
+							full:              "read.context.mountNamespace!=4026531840",
+							eventName:         "read",
+							eventFilter:       "read.context.mountNamespace",
+							operatorAndValues: "!=4026531840",
+						},
 					},
 				},
 			},
 		},
 		{
 			testName: "pidns filter",
-			policy: PolicyFile{
-				Name:          "pidns_filter",
-				Description:   "pidns filter",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{
-						Event:  "read",
-						Filter: []string{"pidns=4026531836"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "pidns-filter",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{
+							Event:   "read",
+							Filters: []string{"pidns=4026531836"},
+						},
 					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{},
+			expPolicyEventMap: PolicyEventMap{
 				0: {
-					newFilterFlagBasedOn(readFlag, "pidns_filter"),
-					{
-						full:              "read.context.pidns=4026531836",
-						filterName:        "read.context.pidns",
-						operatorAndValues: "=4026531836",
-						policyIdx:         0,
-						policyName:        "pidns_filter",
+					policyName: "pidns-filter",
+					eventFlags: []eventFlag{
+						readEvtFlag,
+						{
+							full:              "read.context.pidns=4026531836",
+							eventName:         "read",
+							eventFilter:       "read.context.pidns",
+							operatorAndValues: "=4026531836",
+						},
 					},
 				},
 			},
 		},
 		{
 			testName: "pidNamespace filter",
-			policy: PolicyFile{
-				Name:          "pidNamespace_filter",
-				Description:   "pidNamespace filter",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{
-						Event:  "read",
-						Filter: []string{"pidNamespace!=4026531836"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "pidNamespace-filter",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{
+							Event:   "read",
+							Filters: []string{"pidNamespace!=4026531836"},
+						},
 					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{},
+			expPolicyEventMap: PolicyEventMap{
 				0: {
-					newFilterFlagBasedOn(readFlag, "pidNamespace_filter"),
-					{
-						full:              "read.context.pidNamespace!=4026531836",
-						filterName:        "read.context.pidNamespace",
-						operatorAndValues: "!=4026531836",
-						policyIdx:         0,
-						policyName:        "pidNamespace_filter",
+					policyName: "pidNamespace-filter",
+					eventFlags: []eventFlag{
+						readEvtFlag,
+						{
+							full:              "read.context.pidNamespace!=4026531836",
+							eventName:         "read",
+							eventFilter:       "read.context.pidNamespace",
+							operatorAndValues: "!=4026531836",
+						},
 					},
 				},
 			},
 		},
 		{
 			testName: "processName filter",
-			policy: PolicyFile{
-				Name:          "processName_filter",
-				Description:   "processName filter",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{
-						Event:  "read",
-						Filter: []string{"processName=uname"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "processName-filter",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{
+							Event:   "read",
+							Filters: []string{"processName=uname"},
+						},
 					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{},
+			expPolicyEventMap: PolicyEventMap{
 				0: {
-					newFilterFlagBasedOn(readFlag, "processName_filter"),
-					{
-						full:              "read.context.processName=uname",
-						filterName:        "read.context.processName",
-						operatorAndValues: "=uname",
-						policyIdx:         0,
-						policyName:        "processName_filter",
+					policyName: "processName-filter",
+					eventFlags: []eventFlag{
+						readEvtFlag,
+						{
+							full:              "read.context.processName=uname",
+							eventName:         "read",
+							eventFilter:       "read.context.processName",
+							operatorAndValues: "=uname",
+						},
 					},
 				},
 			},
 		},
 		{
 			testName: "comm filter",
-			policy: PolicyFile{
-				Name:          "comm_filter",
-				Description:   "comm filter",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{
-						Event:  "read",
-						Filter: []string{"comm!=uname"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "comm-filter",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{
+							Event:   "read",
+							Filters: []string{"comm!=uname"},
+						},
 					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{},
+			expPolicyEventMap: PolicyEventMap{
 				0: {
-					newFilterFlagBasedOn(readFlag, "comm_filter"),
-					{
-						full:              "read.context.comm!=uname",
-						filterName:        "read.context.comm",
-						operatorAndValues: "!=uname",
-						policyIdx:         0,
-						policyName:        "comm_filter",
+					policyName: "comm-filter",
+					eventFlags: []eventFlag{
+						readEvtFlag,
+						{
+							full:              "read.context.comm!=uname",
+							eventName:         "read",
+							eventFilter:       "read.context.comm",
+							operatorAndValues: "!=uname",
+						},
 					},
 				},
 			},
 		},
 		{
 			testName: "hostName filter",
-			policy: PolicyFile{
-				Name:          "hostName_filter",
-				Description:   "hostName filter",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{
-						Event:  "read",
-						Filter: []string{"hostName=test"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "hostName-filter",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{
+							Event:   "read",
+							Filters: []string{"hostName=test"},
+						},
 					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{},
+			expPolicyEventMap: PolicyEventMap{
 				0: {
-					newFilterFlagBasedOn(readFlag, "hostName_filter"),
-					{
-						full:              "read.context.hostName=test",
-						filterName:        "read.context.hostName",
-						operatorAndValues: "=test",
-						policyIdx:         0,
-						policyName:        "hostName_filter",
+					policyName: "hostName-filter",
+					eventFlags: []eventFlag{
+						readEvtFlag,
+						{
+							full:              "read.context.hostName=test",
+							eventName:         "read",
+							eventFilter:       "read.context.hostName",
+							operatorAndValues: "=test",
+						},
 					},
 				},
 			},
 		},
 		{
 			testName: "cgroupId filter",
-			policy: PolicyFile{
-				Name:          "cgroupId",
-				Description:   "cgroupId filter",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{
-						Event:  "read",
-						Filter: []string{"cgroupId=test"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "cgroupId",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{
+							Event:   "read",
+							Filters: []string{"cgroupId=test"},
+						},
 					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{},
+			expPolicyEventMap: PolicyEventMap{
 				0: {
-					newFilterFlagBasedOn(readFlag, "cgroupId"),
-					{
-						full:              "read.context.cgroupId=test",
-						filterName:        "read.context.cgroupId",
-						operatorAndValues: "=test",
-						policyIdx:         0,
-						policyName:        "cgroupId",
+					policyName: "cgroupId",
+					eventFlags: []eventFlag{
+						readEvtFlag,
+						{
+							full:              "read.context.cgroupId=test",
+							eventName:         "read",
+							eventFilter:       "read.context.cgroupId",
+							operatorAndValues: "=test",
+						},
 					},
 				},
 			},
 		},
 		{
 			testName: "host filter",
-			policy: PolicyFile{
-				Name:          "host",
-				Description:   "host filter",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{
-						Event:  "read",
-						Filter: []string{"host=test"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "host",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{
+							Event:   "read",
+							Filters: []string{"host=test"},
+						},
 					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{},
+			expPolicyEventMap: PolicyEventMap{
 				0: {
-					newFilterFlagBasedOn(readFlag, "host"),
-					{
-						full:              "read.context.host=test",
-						filterName:        "read.context.host",
-						operatorAndValues: "=test",
-						policyIdx:         0,
-						policyName:        "host",
+					policyName: "host",
+					eventFlags: []eventFlag{
+						readEvtFlag,
+						{
+							full:              "read.context.host=test",
+							eventName:         "read",
+							eventFilter:       "read.context.host",
+							operatorAndValues: "=test",
+						},
 					},
 				},
 			},
 		},
 		{
 			testName: "container filter",
-			policy: PolicyFile{
-				Name:          "container_filter",
-				Description:   "container filter",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{
-						Event:  "read",
-						Filter: []string{"container=c"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "container-filter",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{
+							Event:   "read",
+							Filters: []string{"container=c"},
+						},
 					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{},
+			expPolicyEventMap: PolicyEventMap{
 				0: {
-					newFilterFlagBasedOn(readFlag, "container_filter"),
-					{
-						full:              "read.context.container=c",
-						filterName:        "read.context.container",
-						operatorAndValues: "=c",
-						policyIdx:         0,
-						policyName:        "container_filter",
+					policyName: "container-filter",
+					eventFlags: []eventFlag{
+						readEvtFlag,
+						{
+							full:              "read.context.container=c",
+							eventName:         "read",
+							eventFilter:       "read.context.container",
+							operatorAndValues: "=c",
+						},
 					},
 				},
 			},
 		},
 		{
 			testName: "containerId filter",
-			policy: PolicyFile{
-				Name:          "containerId_filter",
-				Description:   "containerId filter",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{
-						Event:  "read",
-						Filter: []string{"containerId=da91bf3df3dc"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "containerId-filter",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{
+							Event:   "read",
+							Filters: []string{"containerId=da91bf3df3dc"},
+						},
 					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{},
+			expPolicyEventMap: PolicyEventMap{
 				0: {
-					newFilterFlagBasedOn(readFlag, "containerId_filter"),
-					{
-						full:              "read.context.containerId=da91bf3df3dc",
-						filterName:        "read.context.containerId",
-						operatorAndValues: "=da91bf3df3dc",
-						policyIdx:         0,
-						policyName:        "containerId_filter",
+					policyName: "containerId-filter",
+					eventFlags: []eventFlag{
+						readEvtFlag,
+						{
+							full:              "read.context.containerId=da91bf3df3dc",
+							eventName:         "read",
+							eventFilter:       "read.context.containerId",
+							operatorAndValues: "=da91bf3df3dc",
+						},
 					},
 				},
 			},
 		},
 		{
 			testName: "containerImage filter",
-			policy: PolicyFile{
-				Name:          "containerImage_filter",
-				Description:   "containerImage filter",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{
-						Event:  "read",
-						Filter: []string{"containerImage=tracee:latest"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "containerImage-filter",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{
+							Event:   "read",
+							Filters: []string{"containerImage=tracee:latest"},
+						},
 					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{},
+			expPolicyEventMap: PolicyEventMap{
 				0: {
-					newFilterFlagBasedOn(readFlag, "containerImage_filter"),
-					{
-						full:              "read.context.containerImage=tracee:latest",
-						filterName:        "read.context.containerImage",
-						operatorAndValues: "=tracee:latest",
-						policyIdx:         0,
-						policyName:        "containerImage_filter",
+					policyName: "containerImage-filter",
+					eventFlags: []eventFlag{
+						readEvtFlag,
+						{
+							full:              "read.context.containerImage=tracee:latest",
+							eventName:         "read",
+							eventFilter:       "read.context.containerImage",
+							operatorAndValues: "=tracee:latest",
+						},
 					},
 				},
 			},
 		},
 		{
 			testName: "containerName filter",
-			policy: PolicyFile{
-				Name:          "containerName_filter",
-				Description:   "containerName filter",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{
-						Event:  "read",
-						Filter: []string{"containerName=tracee"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "containerName-filter",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{
+							Event:   "read",
+							Filters: []string{"containerName=tracee"},
+						},
 					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{},
+			expPolicyEventMap: PolicyEventMap{
 				0: {
-					newFilterFlagBasedOn(readFlag, "containerName_filter"),
-					{
-						full:              "read.context.containerName=tracee",
-						filterName:        "read.context.containerName",
-						operatorAndValues: "=tracee",
-						policyIdx:         0,
-						policyName:        "containerName_filter",
+					policyName: "containerName-filter",
+					eventFlags: []eventFlag{
+						readEvtFlag,
+						{
+							full:              "read.context.containerName=tracee",
+							eventName:         "read",
+							eventFilter:       "read.context.containerName",
+							operatorAndValues: "=tracee",
+						},
 					},
 				},
 			},
 		},
 		{
 			testName: "podName filter",
-			policy: PolicyFile{
-				Name:          "podName_filter",
-				Description:   "podName filter",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{
-						Event:  "read",
-						Filter: []string{"podName=daemonset/tracee"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "podName-filter",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{
+							Event:   "read",
+							Filters: []string{"podName=daemonset/tracee"},
+						},
 					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{},
+			expPolicyEventMap: PolicyEventMap{
 				0: {
-					newFilterFlagBasedOn(readFlag, "podName_filter"),
-					{
-						full:              "read.context.podName=daemonset/tracee",
-						filterName:        "read.context.podName",
-						operatorAndValues: "=daemonset/tracee",
-						policyIdx:         0,
-						policyName:        "podName_filter",
+					policyName: "podName-filter",
+					eventFlags: []eventFlag{
+						readEvtFlag,
+						{
+							full:              "read.context.podName=daemonset/tracee",
+							eventName:         "read",
+							eventFilter:       "read.context.podName",
+							operatorAndValues: "=daemonset/tracee",
+						},
 					},
 				},
 			},
 		},
 		{
 			testName: "podNamespace filter",
-			policy: PolicyFile{
-				Name:          "podNamespace_filter",
-				Description:   "podNamespace filter",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{
-						Event:  "read",
-						Filter: []string{"podNamespace=production"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "podNamespace-filter",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{
+							Event:   "read",
+							Filters: []string{"podNamespace=production"},
+						},
 					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{},
+			expPolicyEventMap: PolicyEventMap{
 				0: {
-					newFilterFlagBasedOn(readFlag, "podNamespace_filter"),
-					{
-						full:              "read.context.podNamespace=production",
-						filterName:        "read.context.podNamespace",
-						operatorAndValues: "=production",
-						policyIdx:         0,
-						policyName:        "podNamespace_filter",
+					policyName: "podNamespace-filter",
+					eventFlags: []eventFlag{
+						readEvtFlag,
+						{
+							full:              "read.context.podNamespace=production",
+							eventName:         "read",
+							eventFilter:       "read.context.podNamespace",
+							operatorAndValues: "=production",
+						},
 					},
 				},
 			},
 		},
 		{
 			testName: "podUid filter",
-			policy: PolicyFile{
-				Name:          "podUid_filter",
-				Description:   "podUid filter",
-				Scope:         []string{"global"},
-				DefaultAction: "log",
-				Rules: []Rule{
-					{
-						Event:  "read",
-						Filter: []string{"podUid=poduid"},
+			policy: v1beta1.PolicyFile{
+				Metadata: v1beta1.Metadata{
+					Name: "podUid-filter",
+				},
+				Spec: v1beta1.PolicySpec{
+					Scope:          []string{"global"},
+					DefaultActions: []string{"log"},
+					Rules: []v1beta1.Rule{
+						{
+							Event:   "read",
+							Filters: []string{"podUid=poduid"},
+						},
 					},
 				},
 			},
-			expected: FilterMap{
+			expPolicyScopeMap: PolicyScopeMap{},
+			expPolicyEventMap: PolicyEventMap{
 				0: {
-					newFilterFlagBasedOn(readFlag, "podUid_filter"),
-					{
-						full:              "read.context.podUid=poduid",
-						filterName:        "read.context.podUid",
-						operatorAndValues: "=poduid",
-						policyIdx:         0,
-						policyName:        "podUid_filter",
+					policyName: "podUid-filter",
+					eventFlags: []eventFlag{
+						readEvtFlag,
+						{
+							full:              "read.context.podUid=poduid",
+							eventName:         "read",
+							eventFilter:       "read.context.podUid",
+							operatorAndValues: "=poduid",
+						},
 					},
 				},
 			},
@@ -1359,258 +1785,301 @@ func TestPolicyEventFilter(t *testing.T) {
 	}
 
 	for _, test := range tests {
+		test := test
+
 		t.Run(test.testName, func(t *testing.T) {
-			filterMap, err := PrepareFilterMapFromPolicies([]PolicyFile{test.policy})
+			t.Parallel()
+
+			policyScopeMap, policyEventMap, err := PrepareFilterMapsFromPolicies([]v1beta1.PolicyFile{test.policy})
 			assert.NoError(t, err)
 
-			for k, v := range test.expected {
-				assert.Equal(t, v, filterMap[k])
+			for k, v := range test.expPolicyScopeMap {
+				ps, ok := policyScopeMap[k]
+				assert.True(t, ok)
+				assert.Equal(t, v.policyName, ps.policyName)
+				require.Equal(t, len(v.scopeFlags), len(ps.scopeFlags))
+				for i, sf := range v.scopeFlags {
+					assert.Equal(t, sf.full, ps.scopeFlags[i].full)
+					assert.Equal(t, sf.scopeName, ps.scopeFlags[i].scopeName)
+					assert.Equal(t, sf.operator, ps.scopeFlags[i].operator)
+					assert.Equal(t, sf.values, ps.scopeFlags[i].values)
+					assert.Equal(t, sf.operatorAndValues, ps.scopeFlags[i].operatorAndValues)
+				}
+			}
+
+			for k, v := range test.expPolicyEventMap {
+				pe, ok := policyEventMap[k]
+				assert.True(t, ok)
+				assert.Equal(t, v.policyName, pe.policyName)
+				require.Equal(t, len(v.eventFlags), len(pe.eventFlags))
+				for i, ef := range v.eventFlags {
+					assert.Equal(t, ef.full, pe.eventFlags[i].full)
+					assert.Equal(t, ef.eventName, pe.eventFlags[i].eventName)
+					assert.Equal(t, ef.eventFilter, pe.eventFlags[i].eventFilter)
+					assert.Equal(t, ef.operatorAndValues, pe.eventFlags[i].operatorAndValues)
+				}
 			}
 		})
 	}
 }
 
-func TestPrepareFilterScopesForPolicyValidations(t *testing.T) {
-	tests := []struct {
-		testName            string
-		policies            []PolicyFile
-		expectedError       error
-		expectedPolicyError bool
+func TestCreatePolicies(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		testName        string
+		scopeFlags      []string
+		evtFlags        []string
+		expectEvtErr    error
+		expectScopeErr  error
+		expectPolicyErr error
 	}{
 		{
-			testName:      "empty name",
-			policies:      []PolicyFile{{Name: ""}},
-			expectedError: errors.New("policy name cannot be empty"),
+			testName:        "invalid argfilter 1",
+			evtFlags:        []string{"open.args"},
+			expectPolicyErr: filters.InvalidExpression("open."),
 		},
 		{
-			testName: "empty description",
-			policies: []PolicyFile{
-				{
-					Name:        "empty_description",
-					Description: "",
-				},
-			},
-			expectedError: errors.New("flags.validatePolicy: policy empty_description, description cannot be empty"),
+			testName:        "invalid argfilter 2",
+			evtFlags:        []string{"open.args.bla=5"},
+			expectPolicyErr: filters.InvalidEventArgument("bla"),
 		},
 		{
-			testName: "empty scope",
-			policies: []PolicyFile{
-				{
-					Name:          "empty_scope",
-					Description:   "empty scope",
-					Scope:         []string{},
-					DefaultAction: "log",
-				},
-			},
-			expectedError: errors.New("policy empty_scope, scope cannot be empty"),
+			testName:        "invalid argfilter 3",
+			evtFlags:        []string{"open.bla=5"},
+			expectPolicyErr: InvalidFilterFlagFormat("open.bla=5"),
 		},
 		{
-			testName: "empty rules",
-			policies: []PolicyFile{
-				{
-					Name:          "empty_rules",
-					Description:   "empty rules",
-					Scope:         []string{"global"},
-					DefaultAction: "log",
-					Rules:         []Rule{},
-				},
-			},
-			expectedError: errors.New("policy empty_rules, rules cannot be empty"),
+			testName:        "invalid context filter 1",
+			evtFlags:        []string{"open.context"},
+			expectPolicyErr: filters.InvalidExpression("open.context"),
 		},
 		{
-			testName: "empty event name",
-			policies: []PolicyFile{
-				{
-					Name:          "empty_event_name",
-					Description:   "empty event name",
-					Scope:         []string{"global"},
-					DefaultAction: "log",
-					Rules: []Rule{
-						{Event: ""},
-					},
-				},
-			},
-			expectedError: errors.New("flags.validateEvent: policy empty_event_name, event cannot be empty"),
+			testName:        "invalid context filter 2",
+			evtFlags:        []string{"bla.context.processName=ls"},
+			expectPolicyErr: filters.InvalidEventName("bla"),
 		},
 		{
-			testName: "invalid event name",
-			policies: []PolicyFile{
-				{
-					Name:          "invalid_event_name",
-					Description:   "invalid event name",
-					Scope:         []string{"global"},
-					DefaultAction: "log",
-					Rules: []Rule{
-						{Event: "non_existing_event"},
-					},
-				},
-			},
-			expectedError: errors.New("flags.validateEvent: policy invalid_event_name, event non_existing_event is not valid"),
+			testName:        "invalid context filter 3",
+			evtFlags:        []string{"openat.context.procName=ls"},
+			expectPolicyErr: filters.InvalidContextField("procName"),
 		},
 		{
-			testName: "invalid_scope_operator",
-			policies: []PolicyFile{
-				{
-					Name:          "invalid_scope_operator",
-					Description:   "invalid scope operator",
-					Scope:         []string{"random"},
-					DefaultAction: "log",
-					Rules: []Rule{
-						{Event: "write"},
-					},
-				},
-			},
-			expectedError: errors.New("flags.PrepareFilterMapFromPolicies: policy invalid_scope_operator, scope random is not valid"),
+			testName:        "invalid filter",
+			evtFlags:        []string{"blabla=5"},
+			expectEvtErr:    InvalidFilterFlagFormat("blabla=5"),
+			expectPolicyErr: InvalidFlagEmpty(),
 		},
 		{
-			testName: "invalid_scope",
-			policies: []PolicyFile{
-				{
-					Name:          "invalid_scope",
-					Description:   "invalid scope",
-					Scope:         []string{"random!=0"},
-					DefaultAction: "log",
-					Rules: []Rule{
-						{Event: "write"},
-					},
-				},
-			},
-			expectedError: errors.New("flags.validateScope: policy invalid_scope, scope random is not valid"),
+			testName:        "invalid retfilter 1",
+			evtFlags:        []string{".retval"},
+			expectEvtErr:    InvalidFilterFlagFormat(".retval"),
+			expectPolicyErr: InvalidFlagEmpty(),
 		},
 		{
-			testName: "global scope must be unique",
-			policies: []PolicyFile{
-				{
-					Name:          "global_scope_must_be_unique",
-					Description:   "global scope must be unique",
-					Scope:         []string{"global", "uid=1000"},
-					DefaultAction: "log",
-					Rules: []Rule{
-						{Event: "write"},
-					},
-				},
-			},
-			expectedError: errors.New("policy global_scope_must_be_unique, global scope must be unique"),
+			testName:        "invalid retfilter 2",
+			evtFlags:        []string{"open.retvall=5"},
+			expectPolicyErr: InvalidFilterFlagFormat("open.retvall=5"),
 		},
 		{
-			testName: "duplicated event",
-			policies: []PolicyFile{
-				{
-					Name:          "duplicated_event",
-					Description:   "duplicated event",
-					Scope:         []string{"global"},
-					DefaultAction: "log",
-					Rules: []Rule{
-						{Event: "write"},
-						{Event: "write"},
-					},
-				},
-			},
-			expectedError: errors.New("policy duplicated_event, event write is duplicated"),
+			testName:        "invalid operator",
+			scopeFlags:      []string{"uid\t0"},
+			expectPolicyErr: InvalidScopeOptionError("uid\t0", false),
 		},
 		{
-			testName: "invalid filter operator",
-			policies: []PolicyFile{
-				{
-					Name:          "invalid_filter_operator",
-					Description:   "invalid filter operator",
-					Scope:         []string{"global"},
-					DefaultAction: "log",
-					Rules: []Rule{
-						{
-							Event: "write",
-							Filter: []string{
-								"random",
-							},
-						},
-					},
-				},
-			},
-			expectedError: errors.New("flags.PrepareFilterMapFromPolicies: invalid filter operator: random"),
+			testName:        "invalid operator",
+			scopeFlags:      []string{"mntns\t0"},
+			expectPolicyErr: InvalidScopeOptionError("mntns\t0", false),
 		},
 		{
-			testName: "invalid filter",
-			policies: []PolicyFile{
-				{
-					Name:          "invalid_filter",
-					Description:   "invalid filter",
-					Scope:         []string{"global"},
-					DefaultAction: "log",
-					Rules: []Rule{
-						{
-							Event: "write",
-							Filter: []string{
-								"random!=0",
-							},
-						},
-					},
-				},
-			},
-			expectedError: errors.New("flags.validateContext: policy invalid_filter, filter random is not valid"),
+			testName:        "invalid filter type",
+			scopeFlags:      []string{"UID>0"},
+			expectPolicyErr: InvalidScopeOptionError("UID>0", false),
 		},
 		{
-			testName: "empty policy action",
-			policies: []PolicyFile{
-				{
-					Name:        "empty_policy_action",
-					Description: "empty policy action",
-					Scope:       []string{"global"},
-					Rules: []Rule{
-						{Event: "write"},
-					},
-				},
-			},
-			expectedError: errors.New("flags.validatePolicy: policy empty_policy_action, default action cannot be empty"),
+			testName:        "invalid filter type",
+			scopeFlags:      []string{"test=0"},
+			expectPolicyErr: InvalidScopeOptionError("test=0", false),
 		},
 		{
-			testName: "invalid policy action",
-			policies: []PolicyFile{
-				{
-					Name:          "invalid_policy_action",
-					Description:   "invalid policy action",
-					Scope:         []string{"global"},
-					DefaultAction: "audit",
-					Rules: []Rule{
-						{Event: "write"},
-					},
-				},
-			},
-			expectedError: errors.New("flags.validateAction: policy invalid_policy_action, action audit is not valid"),
+			testName:        "invalid filter type",
+			scopeFlags:      []string{"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=0"},
+			expectPolicyErr: InvalidScopeOptionError("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=0", false),
 		},
 		{
-			testName: "duplicated policy name",
-			policies: []PolicyFile{
-				{
-					Name:          "duplicated_policy_name",
-					Description:   "duplicated policy name",
-					Scope:         []string{"global"},
-					DefaultAction: "log",
-					Rules: []Rule{
-						{Event: "write"},
-					},
-				},
-				{
-					Name:          "duplicated_policy_name",
-					Description:   "duplicated policy name",
-					Scope:         []string{"global"},
-					DefaultAction: "log",
-					Rules: []Rule{
-						{Event: "write"},
-					},
-				},
-			},
-			expectedError: errors.New("flags.PrepareFilterMapFromPolicies: policy duplicated_policy_name already exist"),
+			testName:        "invalid mntns 2",
+			scopeFlags:      []string{"mntns=-1"},
+			expectPolicyErr: filters.InvalidValue("-1"),
+		},
+		{
+			testName:        "invalid uid 1",
+			scopeFlags:      []string{"uid=4294967296"},
+			expectPolicyErr: filters.InvalidValue("4294967296"),
+		},
+		{
+			testName:        "invalid uid 2",
+			scopeFlags:      []string{"uid=-1"},
+			expectPolicyErr: filters.InvalidValue("-1"),
 		},
 
-		// invalid args?
-		// invalid retval?
+		{
+			testName:   "success - large uid filter",
+			scopeFlags: []string{fmt.Sprintf("uid=%d", math.MaxInt32)},
+		},
+		{
+			testName:   "success - pid greater or large",
+			scopeFlags: []string{"pid>=12"},
+		},
+		{
+			testName:   "success - uid=0",
+			scopeFlags: []string{"uid=0"},
+		},
+		{
+			testName:   "success - uid!=0",
+			scopeFlags: []string{"uid!=0"},
+		},
+		{
+			testName:   "success - mntns=0",
+			scopeFlags: []string{"mntns=0"},
+		},
+		{
+			testName:   "success - pidns!=0",
+			scopeFlags: []string{"pidns!=0"},
+		},
+		{
+			testName:   "success - comm=ls",
+			scopeFlags: []string{"comm=ls"},
+		},
+		// requires root privileges
+		// {
+		// 	testName:   "success - executable=host:/usr/bin/ls",
+		// 	scopeFlags: []string{"executable=host:/usr/bin/ls"},
+		// },
+		{
+			testName:   "success - executable=/usr/bin/ls",
+			scopeFlags: []string{"executable=/usr/bin/ls"},
+		},
+		{
+			testName:   "success - uts!=deadbeaf",
+			scopeFlags: []string{"uts!=deadbeaf"},
+		},
+		{
+			testName:   "success - uid>0",
+			scopeFlags: []string{"uid>0"},
+		},
+		{
+			testName:   "container",
+			scopeFlags: []string{"container"},
+		},
+		{
+			testName:   "container=new",
+			scopeFlags: []string{"container=new"},
+		},
+		{
+			testName:   "pid=new",
+			scopeFlags: []string{"pid=new"},
+		},
+		{
+			testName:   "container=abcd123",
+			scopeFlags: []string{"container=abcd123"},
+		},
+		{
+			testName: "argfilter",
+			evtFlags: []string{"openat.args.pathname=/bin/ls,/tmp/tracee", "openat.args.pathname!=/etc/passwd"},
+		},
+		{
+			testName: "retfilter",
+			evtFlags: []string{"openat.retval=2", "openat.retval>1"},
+		},
+		{
+			testName: "wildcard filter",
+			evtFlags: []string{"open*"},
+		},
+		{
+			testName: "wildcard not filter",
+			evtFlags: []string{"-*"},
+		},
+		{
+			testName:   "multiple filters",
+			scopeFlags: []string{"uid<1", "mntns=5", "pidns!=3", "pid!=10", "comm=ps", "uts!=abc"},
+		},
+
+		{
+			testName:        "invalid value - string in numeric filter",
+			scopeFlags:      []string{"uid=a"},
+			expectPolicyErr: filters.InvalidValue("a"),
+		},
+		{
+			testName:        "invalid pidns",
+			scopeFlags:      []string{"pidns=a"},
+			expectPolicyErr: filters.InvalidValue("a"),
+		},
+
+		{
+			testName:   "valid pid",
+			scopeFlags: []string{"pid>12"},
+		},
+		{
+			testName: "adding retval filter then argfilter",
+			evtFlags: []string{"open.retval=5", "security_file_open.args.pathname=/etc/shadow"},
+		},
+
+		{
+			testName:        "invalid - uid<0",
+			scopeFlags:      []string{"uid<0"},
+			expectPolicyErr: filters.InvalidExpression("<0"),
+		},
+		{
+			testName:        "invalid wildcard",
+			evtFlags:        []string{"blah*"},
+			expectPolicyErr: InvalidEventError("blah*"),
+		},
+		{
+			testName:        "invalid wildcard 2",
+			evtFlags:        []string{"bl*ah"},
+			expectPolicyErr: InvalidEventError("bl*ah"),
+		},
+		{
+			testName:        "internal event selection",
+			evtFlags:        []string{"print_syscall_table"},
+			expectPolicyErr: InvalidEventError("print_syscall_table"),
+		},
+		{
+			testName:        "invalid not wildcard",
+			evtFlags:        []string{"-blah*"},
+			expectPolicyErr: InvalidEventExcludeError("blah*"),
+		},
+		{
+			testName:        "invalid not wildcard 2",
+			evtFlags:        []string{"-bl*ah"},
+			expectPolicyErr: InvalidEventExcludeError("bl*ah"),
+		},
 	}
+	for _, tc := range testCases {
+		tc := tc
 
-	for _, test := range tests {
-		t.Run(test.testName, func(t *testing.T) {
-			_, err := PrepareFilterMapFromPolicies(test.policies)
-			if test.expectedError != nil {
-				assert.ErrorContains(t, err, test.expectedError.Error())
+		t.Run(tc.testName, func(t *testing.T) {
+			t.Parallel()
+
+			policyEventsMap, err := PrepareEventMapFromFlags(tc.evtFlags)
+			if tc.expectEvtErr != nil {
+				assert.ErrorContains(t, err, tc.expectEvtErr.Error())
+			} else {
+				assert.NoError(t, err)
+			}
+
+			policyScopeMap, err := PrepareScopeMapFromFlags(tc.scopeFlags)
+			if tc.expectScopeErr != nil {
+				assert.ErrorContains(t, err, tc.expectScopeErr.Error())
+			} else {
+				assert.NoError(t, err)
+			}
+
+			_, err = CreatePolicies(policyScopeMap, policyEventsMap, false)
+			if tc.expectPolicyErr != nil {
+				assert.ErrorContains(t, err, tc.expectPolicyErr.Error())
+			} else {
+				assert.NoError(t, err)
 			}
 		})
 	}

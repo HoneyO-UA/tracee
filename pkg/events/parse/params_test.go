@@ -9,7 +9,11 @@ import (
 )
 
 func TestArgVal(t *testing.T) {
+	t.Parallel()
+
 	t.Run("int32", func(t *testing.T) {
+		t.Parallel()
+
 		tests := []struct {
 			name          string
 			arg           trace.Argument
@@ -52,9 +56,13 @@ func TestArgVal(t *testing.T) {
 		}
 
 		for _, tt := range tests {
+			tt := tt
+
 			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
 				e := trace.Event{Args: []trace.Argument{tt.arg}}
-				val, err := ArgVal[int32](&e, tt.name)
+				val, err := ArgVal[int32](e.Args, tt.name)
 				if tt.errorMessage != "" {
 					assert.Error(t, err)
 					assert.Contains(t, err.Error(), tt.errorMessage)
@@ -67,6 +75,8 @@ func TestArgVal(t *testing.T) {
 	})
 
 	t.Run("string", func(t *testing.T) {
+		t.Parallel()
+
 		tests := []struct {
 			name          string
 			arg           trace.Argument
@@ -109,9 +119,13 @@ func TestArgVal(t *testing.T) {
 		}
 
 		for _, tt := range tests {
+			tt := tt
+
 			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
 				e := trace.Event{Args: []trace.Argument{tt.arg}}
-				val, err := ArgVal[string](&e, tt.name)
+				val, err := ArgVal[string](e.Args, tt.name)
 				if tt.errorMessage != "" {
 					assert.Error(t, err)
 					assert.Contains(t, err.Error(), tt.errorMessage)
@@ -124,6 +138,8 @@ func TestArgVal(t *testing.T) {
 	})
 
 	t.Run("uint64", func(t *testing.T) {
+		t.Parallel()
+
 		tests := []struct {
 			name          string
 			arg           trace.Argument
@@ -166,9 +182,13 @@ func TestArgVal(t *testing.T) {
 		}
 
 		for _, tt := range tests {
+			tt := tt
+
 			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
 				e := trace.Event{Args: []trace.Argument{tt.arg}}
-				val, err := ArgVal[uint64](&e, tt.name)
+				val, err := ArgVal[uint64](e.Args, tt.name)
 				if tt.errorMessage != "" {
 					assert.Error(t, err)
 					assert.Contains(t, err.Error(), tt.errorMessage)
@@ -181,6 +201,8 @@ func TestArgVal(t *testing.T) {
 	})
 
 	t.Run("uint32", func(t *testing.T) {
+		t.Parallel()
+
 		tests := []struct {
 			name          string
 			arg           trace.Argument
@@ -223,9 +245,13 @@ func TestArgVal(t *testing.T) {
 		}
 
 		for _, tt := range tests {
+			tt := tt
+
 			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
 				e := trace.Event{Args: []trace.Argument{tt.arg}}
-				val, err := ArgVal[uint32](&e, tt.name)
+				val, err := ArgVal[uint32](e.Args, tt.name)
 				if tt.errorMessage != "" {
 					assert.Error(t, err)
 					assert.Contains(t, err.Error(), tt.errorMessage)
@@ -238,6 +264,8 @@ func TestArgVal(t *testing.T) {
 	})
 
 	t.Run("[]string", func(t *testing.T) {
+		t.Parallel()
+
 		tests := []struct {
 			name          string
 			arg           trace.Argument
@@ -280,9 +308,13 @@ func TestArgVal(t *testing.T) {
 		}
 
 		for _, tt := range tests {
+			tt := tt
+
 			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
 				e := trace.Event{Args: []trace.Argument{tt.arg}}
-				val, err := ArgVal[[]string](&e, tt.name)
+				val, err := ArgVal[[]string](e.Args, tt.name)
 				if tt.errorMessage != "" {
 					assert.Error(t, err)
 					assert.Contains(t, err.Error(), tt.errorMessage)
@@ -295,6 +327,8 @@ func TestArgVal(t *testing.T) {
 	})
 
 	t.Run("[]uint64", func(t *testing.T) {
+		t.Parallel()
+
 		tests := []struct {
 			name          string
 			arg           trace.Argument
@@ -337,9 +371,13 @@ func TestArgVal(t *testing.T) {
 		}
 
 		for _, tt := range tests {
+			tt := tt
+
 			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
 				e := trace.Event{Args: []trace.Argument{tt.arg}}
-				val, err := ArgVal[[]uint64](&e, tt.name)
+				val, err := ArgVal[[]uint64](e.Args, tt.name)
 				if tt.errorMessage != "" {
 					assert.Error(t, err)
 					assert.Contains(t, err.Error(), tt.errorMessage)

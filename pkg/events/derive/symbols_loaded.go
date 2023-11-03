@@ -4,7 +4,7 @@ import (
 	"path"
 	"strings"
 
-	lru "github.com/hashicorp/golang-lru"
+	lru "github.com/hashicorp/golang-lru/v2"
 	"golang.org/x/exp/maps"
 
 	"github.com/aquasecurity/tracee/pkg/errfmt"
@@ -71,7 +71,7 @@ type symbolsLoadedEventGenerator struct {
 	pathPrefixWhitelist []string
 	librariesWhitelist  []string
 	returnedErrors      map[string]bool
-	libsCache           *lru.Cache
+	libsCache           *lru.Cache[sharedobjs.ObjID, []string]
 }
 
 func initSymbolsLoadedEventGenerator(
@@ -93,7 +93,7 @@ func initSymbolsLoadedEventGenerator(
 		}
 	}
 
-	cacheLRU, _ := lru.New(10240)
+	cacheLRU, _ := lru.New[sharedobjs.ObjID, []string](10240)
 
 	return &symbolsLoadedEventGenerator{
 		soLoader:            soLoader,
@@ -193,35 +193,26 @@ func (symbsLoadedGen *symbolsLoadedEventGenerator) isWhitelist(soPath string) bo
 // getSymbolsFromCache query the cache for check results of specified object.
 // Return the watched symbols found in the object, and if it was found in the cache.
 func (symbsLoadedGen *symbolsLoadedEventGenerator) getSymbolsFromCache(id sharedobjs.ObjID) ([]string, bool) {
-	cachedSyms, ok := symbsLoadedGen.libsCache.Get(id)
-	if !ok {
-		return nil, false
-	}
-	cachedSymsList, ok := cachedSyms.([]string)
-	if !ok {
-		logger.Errorw("Unexpected cached type")
-		return nil, false
-	}
-	return cachedSymsList, true
+	return symbsLoadedGen.libsCache.Get(id)
 }
 
 // getSharedObjectInfo extract from SO loading event the information available about the SO
 func getSharedObjectInfo(event trace.Event) (sharedobjs.ObjInfo, error) {
 	var objInfo sharedobjs.ObjInfo
 
-	loadedObjectInode, err := parse.ArgVal[uint64](&event, "inode")
+	loadedObjectInode, err := parse.ArgVal[uint64](event.Args, "inode")
 	if err != nil {
 		return objInfo, errfmt.WrapError(err)
 	}
-	loadedObjectDevice, err := parse.ArgVal[uint32](&event, "dev")
+	loadedObjectDevice, err := parse.ArgVal[uint32](event.Args, "dev")
 	if err != nil {
 		return objInfo, errfmt.WrapError(err)
 	}
-	loadedObjectCtime, err := parse.ArgVal[uint64](&event, "ctime")
+	loadedObjectCtime, err := parse.ArgVal[uint64](event.Args, "ctime")
 	if err != nil {
 		return objInfo, errfmt.WrapError(err)
 	}
-	loadedObjectPath, err := parse.ArgVal[string](&event, "pathname")
+	loadedObjectPath, err := parse.ArgVal[string](event.Args, "pathname")
 	if err != nil {
 		return objInfo, errfmt.WrapError(err)
 	}

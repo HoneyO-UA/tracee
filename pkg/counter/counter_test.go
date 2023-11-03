@@ -2,176 +2,307 @@ package counter
 
 import (
 	"math"
+	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
+// Increment
+
 func TestIncrement(t *testing.T) {
+	t.Parallel()
+
 	expected := uint64(1)
 	c := NewCounter(0)
 
 	err := c.Increment()
 
-	if err != nil {
-		t.Error(err)
-	}
-
-	if c.Read() != expected {
-		t.Errorf("Increment was incorrect, got %d, expected %d", c.Read(), expected)
-	}
+	require.NoError(t, err)
+	require.Equal(t, expected, c.Get())
 }
 
-func TestZeroedIncrement(t *testing.T) {
-	expected := uint64(1)
-	c := NewCounter(1)
+func TestIncrementWithValue(t *testing.T) {
+	t.Parallel()
+
+	expected := uint64(9)
+	c := NewCounter(0)
+
+	err := c.Increment(9)
+
+	require.NoError(t, err)
+	require.Equal(t, expected, c.Get())
+}
+
+func TestIncrementWithMultipleValue(t *testing.T) {
+	t.Parallel()
+
+	expected := uint64(9)
+	c := NewCounter(0)
+
+	err := c.Increment(3, 3, 3)
+
+	require.NoError(t, err)
+	require.Equal(t, expected, c.Get())
+}
+
+func TestIncrementAndRead(t *testing.T) {
+	t.Parallel()
+
+	expected := uint64(9)
+	c := NewCounter(0)
+
+	n, err := c.IncrementValueAndRead(9)
+
+	require.NoError(t, err)
+	require.Equal(t, expected, n)
+	require.Equal(t, expected, c.Get())
+}
+
+func TestZeroedIncrementWithValue(t *testing.T) {
+	t.Parallel()
+
+	expected := uint64(9)
+	c := NewCounter(9)
 
 	err := c.Increment(0)
 
-	if err != nil {
-		t.Error(err)
-	}
-
-	if c.Read() != expected {
-		t.Errorf("Increment was incorrect, got %d, expected %d", c.Read(), expected)
-	}
+	require.NoError(t, err)
+	require.Equal(t, expected, c.Get())
 }
 
-func TestIncrementWrapErr(t *testing.T) {
-	expected := uint64(math.MaxUint64)
-	c := NewCounter(expected)
+func TestZeroedIncrementWithMultipleValue(t *testing.T) {
+	t.Parallel()
 
-	err := c.Increment()
-	if err == nil {
-		t.Errorf("Increment was incorrect, got no error, expected %v", errorCounterWrapAround())
-	}
+	expected := uint64(9)
+	c := NewCounter(9)
 
-	if c.Read() != expected {
-		t.Errorf("Increment was incorrect, got %d, expected %d", c.Read(), expected)
-	}
+	err := c.Increment(0, 0, 0)
+
+	require.NoError(t, err)
+	require.Equal(t, expected, c.Get())
 }
 
-func TestIncrementMultiple(t *testing.T) {
-	expected := uint64(1 + 2 + 3)
+func TestIncrementOverflow(t *testing.T) {
+	t.Parallel()
+
+	expected := uint64(0)
+	c := NewCounter(uint64(math.MaxUint64) - 1)
+
+	err := c.Increment() // uint64 max value
+	require.NoError(t, err)
+
+	err = c.Increment() // overflow
+	require.Error(t, err)
+
+	require.Equal(t, expected, c.Get())
+}
+
+func TestIncrementWithValueOverflow(t *testing.T) {
+	t.Parallel()
+
+	expected := uint64(0)
 	c := NewCounter(0)
 
-	err := c.Increment(1, 2, 3)
-	if err != nil {
-		t.Error(err)
-	}
+	err := c.Increment(uint64(math.MaxUint64 / 2))
+	require.NoError(t, err)
 
-	if c.Read() != expected {
-		t.Errorf("Increment was incorrect, got %d, expected %d", c.Read(), expected)
-	}
+	err = c.Increment(uint64(math.MaxUint64/2) + 2)
+	require.Error(t, err)
+
+	require.Equal(t, expected, c.Get())
 }
 
-func TestIncrementMultipleSumWrapErr(t *testing.T) {
-	expected := uint64(0)
-	c := NewCounter(expected)
+func TestIncrement_MultipleThreads(t *testing.T) {
+	t.Parallel()
 
-	err := c.Increment(1, math.MaxUint64)
-	if err == nil {
-		t.Errorf("Increment was incorrect, got no error, expected %v", errorCounterSumWrapAround())
+	expected := uint64(100000)
+	c := NewCounter(0)
+
+	wg := sync.WaitGroup{}
+
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			for j := 0; j < 500; j++ {
+				err := c.Increment(1, 1) // test with multiple values
+				require.NoError(t, err)
+			}
+			wg.Done()
+		}()
 	}
 
-	if c.Read() != expected {
-		t.Errorf("Increment was incorrect, got %d, expected %d", c.Read(), expected)
-	}
+	wg.Wait()
+
+	require.Equal(t, expected, c.Get())
 }
 
-func TestIncrementMultipleWrapErr(t *testing.T) {
-	expected := uint64(math.MaxUint64)
-	c := NewCounter(expected)
-
-	err := c.Increment(1)
-	if err == nil {
-		t.Errorf("Increment was incorrect, got no error, expected %v", errorCounterWrapAround())
-	}
-
-	if c.Read() != expected {
-		t.Errorf("Increment was incorrect, got %d, expected %d", c.Read(), expected)
-	}
-}
+// Decrement
 
 func TestDecrement(t *testing.T) {
+	t.Parallel()
+
 	expected := uint64(0)
 	c := NewCounter(1)
 
 	err := c.Decrement()
-	if err != nil {
-		t.Error(err)
-	}
 
-	if c.Read() != expected {
-		t.Errorf("Decrement was incorrect, got %d, expected %d", c.Read(), expected)
-	}
+	require.NoError(t, err)
+	require.Equal(t, expected, c.Get())
 }
 
-func TestZeroedDecrement(t *testing.T) {
+func TestDecrementWithValue(t *testing.T) {
+	t.Parallel()
+
 	expected := uint64(1)
-	c := NewCounter(1)
+	c := NewCounter(10)
+
+	err := c.Decrement(9)
+
+	require.NoError(t, err)
+	require.Equal(t, expected, c.Get())
+}
+
+func TestDecrementWithMultipleValue(t *testing.T) {
+	t.Parallel()
+
+	expected := uint64(1)
+	c := NewCounter(10)
+
+	err := c.Decrement(3, 3, 3)
+
+	require.NoError(t, err)
+	require.Equal(t, expected, c.Get())
+}
+
+func TestDecrementAndRead(t *testing.T) {
+	t.Parallel()
+
+	expected := uint64(1)
+	c := NewCounter(10)
+
+	n, err := c.DecrementValueAndRead(9)
+
+	require.NoError(t, err)
+	require.Equal(t, expected, n)
+	require.Equal(t, expected, c.Get())
+}
+
+func TestZeroedDecrementWithValue(t *testing.T) {
+	t.Parallel()
+
+	expected := uint64(9)
+	c := NewCounter(9)
 
 	err := c.Decrement(0)
 
-	if err != nil {
-		t.Error(err)
-	}
-
-	if c.Read() != expected {
-		t.Errorf("Decrement was incorrect, got %d, expected %d", c.Read(), expected)
-	}
+	require.NoError(t, err)
+	require.Equal(t, expected, c.Get())
 }
 
-func TestDecrementWrapErr(t *testing.T) {
-	expected := uint64(0)
-	c := NewCounter(expected)
+func TestZeroedDecrementWithMultipleValue(t *testing.T) {
+	t.Parallel()
 
-	err := c.Decrement()
-	if err == nil {
-		t.Errorf("Decrement was incorrect, got no error, expected %v", errorCounterWrapAround())
-	}
+	expected := uint64(9)
+	c := NewCounter(9)
 
-	if c.Read() != expected {
-		t.Errorf("Decrement was incorrect, got %d, expected %d", c.Read(), expected)
-	}
+	err := c.Decrement(0, 0, 0)
+
+	require.NoError(t, err)
+	require.Equal(t, expected, c.Get())
 }
 
-func TestDecrementMultiple(t *testing.T) {
-	expected := uint64(0)
-	c := NewCounter(1 + 2 + 3)
+func TestDecrementOverflow(t *testing.T) {
+	t.Parallel()
 
-	err := c.Decrement(1, 2, 3)
-	if err != nil {
-		t.Error(err)
-	}
-
-	if c.Read() != expected {
-		t.Errorf("Decrement was incorrect, got %d, expected %d", c.Read(), expected)
-	}
-}
-
-func TestDecrementMultipleSumWrapErr(t *testing.T) {
 	expected := uint64(math.MaxUint64)
-	c := NewCounter(math.MaxUint64)
+	c := NewCounter(0)
 
-	err := c.Decrement(1, math.MaxUint64)
-	if err == nil {
-		t.Errorf("Decrement was incorrect, got no error, expected %v", errorCounterSumWrapAround())
-	}
+	err := c.Decrement() // uint64 max value
+	require.Error(t, err)
+	require.Equal(t, expected, c.Get())
 
-	if c.Read() != expected {
-		t.Errorf("Decrement was incorrect, got %d, expected %d", c.Read(), expected)
-	}
+	expected = uint64(math.MaxUint64 - 1)
+
+	err = c.Decrement() // uint64 max value
+	require.NoError(t, err)
+	require.Equal(t, expected, c.Get())
 }
 
-func TestDecrementMultipleWrapErr(t *testing.T) {
-	expected := uint64(3)
-	c := NewCounter(expected)
+func TestDecrementWithValueOverflow(t *testing.T) {
+	t.Parallel()
 
-	err := c.Decrement(1, 2, 1)
-	if err == nil {
-		t.Errorf("Decrement was incorrect, got no error, expected %v", errorCounterWrapAround())
+	expected := uint64(math.MaxUint64 - 8)
+	c := NewCounter(0)
+
+	err := c.Decrement(9)
+	require.Error(t, err)
+	require.Equal(t, expected, c.Get())
+}
+
+func TestDecrement_MultipleThreads(t *testing.T) {
+	t.Parallel()
+
+	expected := uint64(0)
+	c := NewCounter(100000)
+
+	wg := sync.WaitGroup{}
+
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			for j := 0; j < 500; j++ {
+				err := c.Decrement(1, 1) // test with multiple values
+				require.NoError(t, err)
+			}
+			wg.Done()
+		}()
 	}
 
-	if c.Read() != expected {
-		t.Errorf("Decrement was incorrect, got %d, expected %d", c.Read(), expected)
+	wg.Wait()
+
+	require.Equal(t, expected, c.Get())
+}
+
+// Increment + Decrement
+
+func TestIncrementDecrement(t *testing.T) {
+	t.Parallel()
+
+	expected := uint64(0)
+	c := NewCounter(0)
+
+	err := c.Increment()
+	require.NoError(t, err)
+
+	err = c.Decrement()
+	require.NoError(t, err)
+
+	require.Equal(t, expected, c.Get())
+}
+
+func TestIncrementDecrement_MultipleThreads(t *testing.T) {
+	t.Parallel()
+
+	expected := uint64(0)
+	c := NewCounter(0)
+
+	wg := sync.WaitGroup{}
+
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			for j := 0; j < 1000; j++ {
+				err := c.Increment()
+				require.NoError(t, err)
+				err = c.Decrement()
+				require.NoError(t, err)
+			}
+			wg.Done()
+		}()
 	}
+
+	wg.Wait()
+
+	require.Equal(t, expected, c.Get())
 }

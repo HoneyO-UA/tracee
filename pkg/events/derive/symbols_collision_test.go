@@ -344,7 +344,11 @@ func TestSymbolsCollisionArgsGenerator_FindSOCollision(t *testing.T) {
 	}
 
 	for _, filterTestCase := range filtersTestCases {
+		filterTestCase := filterTestCase
+
 		t.Run(filterTestCase.name, func(t *testing.T) {
+			t.Parallel()
+
 			for _, testCase := range testCases {
 				t.Run(testCase.name, func(t *testing.T) {
 					mockLoader := initLoaderMock(false)
@@ -394,7 +398,11 @@ func TestSymbolsCollisionArgsGenerator_deriveArgs(t *testing.T) {
 	pid := 1
 
 	for _, testCase := range testCases {
+		testCase := testCase
+
 		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
 			mockLoader := initLoaderMock(false)
 			gen := initSOCollisionsEventGenerator(
 				mockLoader,
@@ -452,7 +460,11 @@ func TestSymbolsCollision(t *testing.T) {
 	pid := 1
 
 	for _, testCase := range testCases {
+		testCase := testCase
+
 		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
 			mockLoader := initLoaderMock(false)
 
 			// Prepare mocked filters for the existing test cases
@@ -504,14 +516,14 @@ func TestSymbolsCollision(t *testing.T) {
 					found := false
 					for _, event := range colEvents {
 						require.Len(t, event.Args, 3)
-						loadingSOPath, err := parse.ArgVal[string](&event, "loaded_path")
+						loadingSOPath, err := parse.ArgVal[string](event.Args, "loaded_path")
 						require.NoError(t, err)
 						assert.Equal(t, testCase.loadingSO.Path, loadingSOPath)
-						collidedSOPath, err := parse.ArgVal[string](&event, "collision_path")
+						collidedSOPath, err := parse.ArgVal[string](event.Args, "collision_path")
 						require.NoError(t, err)
 						require.IsType(t, "", collidedSOPath)
 						if collidedSOPath == lso.so.Path {
-							col, err := parse.ArgVal[[]string](&event, "symbols")
+							col, err := parse.ArgVal[[]string](event.Args, "symbols")
 							require.NoError(t, err)
 							assert.ElementsMatch(t, col, lso.expectedCollisions)
 							found = true

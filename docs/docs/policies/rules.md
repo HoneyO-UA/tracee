@@ -7,20 +7,82 @@ Rules determine which events a policy should trace.
 An event can match all occurrences of events for a specific scope, or specific events depending on its filters.
 Events support three types of filters: `context`, `arguments` and `return value`. 
 
-## Context filter
+### Type of Events
+
+You can add events as either of the following:
+
+**[A syscall](../events/builtin/syscalls/index.md)**
+
+Example Scope Section referencing the `open` syscall:
+
+```bash
+spec:
+	scope:
+	    - global
+	rules:
+	    event: open
+```
+
+The name of the syscall is going to be the name of the event.
+
+**[Network Events](../events/builtin/network.md)**
+
+Network Events can be specified from the list of `Available network events`.
+
+For example:
+
+```bash
+spec:
+	scope:
+	    - global
+	rules:
+	    event: net_packet_ipv4
+```
+
+**[A behavioural Signature](../events/builtin/signatures/index.md)**
+
+To specify one of the behavioral signatures as an event, use the name of the signature from the table in the documentation as the event name:
+
+```bash
+spec:
+	scope:
+	    - global
+	rules:
+	    event: anti_debugging
+```
+
+**[Any of our extra events](../events/builtin/extra/bpf_attach.md)**
+
+Any of the extra events listed in the Tracee documentation can be listed in the Tracee Policy.
+
+For instance, to specify the [do_sigaction](../events/builtin/extra/do_sigaction.md) event, provide the name in the YAML manifest:
+
+```bash
+spec:
+	scope:
+	    - global
+	rules:
+	    event: do_sigaction
+```
+
+## Context filters
 
 Context is data which is collected along the event. They can be filtered like:
 
 ```yaml
-name: sample_context_filter
-description: sample context filter
-defaultAction: log
-scope:
-    - global
-rules:
-    event: sched_process_exec
-    filter:
-        - pid=1000
+apiVersion: tracee.aquasec.com/v1beta1
+kind: Policy
+metadata:
+	name: sample-context-filter
+	annotations:
+		description: sample context filter
+spec:
+	scope:
+	    - global
+	rules:
+	    event: sched_process_exec
+	    filters:
+		- pid=1000
 ```
 
 The context filters supported are:
@@ -29,7 +91,7 @@ The context filters supported are:
 
 ```yaml
 event: sched_process_exec
-filter:
+filters:
     - pid=1000
 ```
 
@@ -37,7 +99,7 @@ filter:
 
 ```yaml
 event: sched_process_exec
-filter:
+filters:
     - tid=13819
 ```
 
@@ -45,7 +107,7 @@ filter:
 
 ```yaml
 event: sched_process_exec
-filter:
+filters:
     - ppid=1000
 ```
 
@@ -53,7 +115,7 @@ filter:
 
 ```yaml
 event: sched_process_exec
-filter:
+filters:
     - hostTid=1000
 ```
 
@@ -61,7 +123,7 @@ filter:
 
 ```yaml
 event: sched_process_exec
-filter:
+filters:
     - hostPid=1000
 ```
 
@@ -69,7 +131,7 @@ filter:
 
 ```yaml
 event: sched_process_exec
-filter:
+filters:
     - hostParentProcessId=1
 ```
 
@@ -77,7 +139,7 @@ filter:
 
 ```yaml
 event: sched_process_exec
-filter:
+filters:
     - uid=0
 ```
 
@@ -85,7 +147,7 @@ filter:
 
 ```yaml
 event: sched_process_exec
-filter:
+filters:
     - mntns=4026531840
 ```
 
@@ -93,7 +155,7 @@ filter:
 
 ```yaml
 event: sched_process_exec
-filter:
+filters:
     - pidns=4026531836
 ```
 
@@ -101,7 +163,7 @@ filter:
 
 ```yaml
 event: sched_process_exec
-filter:
+filters:
     - comm=uname
 ```
 
@@ -109,7 +171,7 @@ filter:
 
 ```yaml
 event: sched_process_exec
-filter:
+filters:
     - hostName=hostname
 ```
 
@@ -117,7 +179,7 @@ filter:
 
 ```yaml
 event: sched_process_exec
-filter:
+filters:
     - cgroupId=5247
 ```
 
@@ -125,7 +187,7 @@ filter:
 
 ```yaml
 event: sched_process_exec
-filter:
+filters:
     - container=66c2778945e29dfd36532d63c38c2ce4ed1
 ```
 
@@ -133,7 +195,7 @@ filter:
 
 ```yaml
 event: sched_process_exec
-filter:
+filters:
     - containerId=66c2778945e29dfd36532d63c38c2ce4ed1
 ```
 
@@ -141,7 +203,7 @@ filter:
 
 ```yaml
 event: sched_process_exec
-filter:
+filters:
     - containerImage=ubuntu:latest
 ```
 
@@ -149,7 +211,7 @@ filter:
 
 ```yaml
 event: sched_process_exec
-filter:
+filters:
     - containerName=test
 ```
 
@@ -157,7 +219,7 @@ filter:
 
 ```yaml
 event: sched_process_exec
-filter:
+filters:
     - podName=daemonset/test
 ```
 
@@ -165,7 +227,7 @@ filter:
 
 ```yaml
 event: sched_process_exec
-filter:
+filters:
     - podNamespace=production
 ```
 
@@ -173,7 +235,7 @@ filter:
 
 ```yaml
 event: sched_process_exec
-filter:
+filters:
     - podUid=66c2778945e29dfd36532d63c38c2ce4ed16a002c44cb254b8e
 ```
 
@@ -183,21 +245,25 @@ filter:
 Events have arguments, which can be filtered. 
 
 ```yaml
-name: sample_argument_filter
-description: sample argument filter
-defaultAction: log
-scope:
-    - global
-rules:
-    event: security_file_open
-    filter:
-        - args.pathname=/tmp*
+apiVersion: tracee.aquasec.com/v1beta1
+kind: Policy
+metadata:
+	name: sample-argument-filter
+	annotations:
+		description: sample argument filter
+spec:
+	scope:
+	    - global
+	rules:
+	    event: security_file_open
+	    filters:
+		- args.pathname=/tmp*
 ```
 
 Arguments can be found on the respective event definition, in this case [security_file_open](https://github.com/aquasecurity/tracee/blob/main/pkg/events/events.goL5293-L529), or the user can test the event output in CLI before defining a policy, e.g:
 
 ```console
-tracee -f e=security_file_open --output json
+tracee -e security_file_open --output json
 ```
 
 ```json
@@ -209,13 +275,17 @@ tracee -f e=security_file_open --output json
 Return values can also be filtered.
 
 ```yaml
-name: sample_return_value
-description: sample return filter
-defaultAction: log
-scope:
-    - global
-rules:
-    event: close
-    filter:
-        - retval!=0
+apiVersion: tracee.aquasec.com/v1beta1
+kind: Policy
+metadata:
+	name: sample-return-value
+	annotations:
+		description: sample return value
+spec:
+	scope:
+	    - global
+	rules:
+	    event: close
+	    filters:
+		- retval!=0
 ```
