@@ -189,7 +189,7 @@ func (c *Containers) cgroupUpdate(
 
 	c.cgroupsMap[uint32(cgroupId)] = info
 
-	c.EnrichCgroupInfo(cgroupId)
+	// c.EnrichCgroupInfo(cgroupId)
 	return info, nil
 }
 
