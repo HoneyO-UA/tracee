@@ -176,7 +176,7 @@ func (c *Containers) CgroupUpdate(cgroupId uint64, path string, ctime time.Time)
 	c.cgroupsMap[uint32(cgroupId)] = info
 	c.mtx.Unlock()
 
-	c.EnrichCgroupInfo(cgroupId)
+	//c.EnrichCgroupInfo(cgroupId)
 	return info, nil
 }
 
