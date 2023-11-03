@@ -177,7 +177,7 @@ func (c *Containers) cgroupUpdate(
 	container := cruntime.ContainerMetadata{
 		ContainerId: containerId,
 	}
-	
+
 	info := CgroupInfo{
 		Path:          path,
 		Container:     container,
@@ -379,15 +379,14 @@ func (c *Containers) CgroupMkdir(cgroupId uint64, subPath string, hierarchyID ui
 
 // FindContainerCgroupID32LSB returns the 32 LSB of the Cgroup ID for a given label and it's value
 func (c *Containers) FindContainerCgroupID32LSB(label string, value string) []uint32 {
-	fmt.Println(label, value)
 
-	filter := func(container cruntime.ContainerMetadata , v string) bool {
+	filter := func(container cruntime.ContainerMetadata, v string) bool {
 		switch label {
-		case "namespace": 
-			return container.Pod.Namespace  == v
-		case "podName": 
+		case "namespace":
+			return container.Pod.Namespace == v
+		case "podName":
 			return strings.HasPrefix(container.Pod.Name, v)
-		case "id": 
+		case "id":
 			return strings.HasPrefix(container.ContainerId, v)
 		default:
 			return false
@@ -398,7 +397,6 @@ func (c *Containers) FindContainerCgroupID32LSB(label string, value string) []ui
 	c.cgroupsMutex.RLock()
 	defer c.cgroupsMutex.RUnlock()
 	for k, v := range c.cgroupsMap {
-		fmt.Println(v.Container)
 		if filter(v.Container, value) {
 			cgroupIDs = append(cgroupIDs, k)
 		}
