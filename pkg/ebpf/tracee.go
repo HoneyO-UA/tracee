@@ -410,6 +410,13 @@ func (t *Tracee) Init(ctx gocontext.Context) error {
 		return errfmt.Errorf("error populating containers: %v", err)
 	}
 
+	// Run containers enrichment logic
+	cGroupIDs := t.containers.GetContainers()
+	for id, _ := range cGroupIDs {
+		if _, err := t.containers.EnrichCgroupInfo(uint64(id)); err != nil {
+			return errfmt.Errorf("Error Enrich container %d -> %v", id, err)
+		}
+	}
 	// Initialize containers related logic
 
 	t.contPathResolver = containers.InitContainerPathResolver(&t.pidsInMntns)
