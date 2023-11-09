@@ -410,6 +410,11 @@ func (t *Tracee) Init(ctx gocontext.Context) error {
 		return errfmt.Errorf("error populating containers: %v", err)
 	}
 
+	// Initialize containers related logic
+
+	t.contPathResolver = containers.InitContainerPathResolver(&t.pidsInMntns)
+	t.contSymbolsLoader = sharedobjs.InitContainersSymbolsLoader(t.contPathResolver, 1024)
+
 	// Run containers enrichment logic
 	cGroupIDs := t.containers.GetContainers()
 	for id, _ := range cGroupIDs {
@@ -417,10 +422,6 @@ func (t *Tracee) Init(ctx gocontext.Context) error {
 			return errfmt.Errorf("Error Enrich container %d -> %v", id, err)
 		}
 	}
-	// Initialize containers related logic
-
-	t.contPathResolver = containers.InitContainerPathResolver(&t.pidsInMntns)
-	t.contSymbolsLoader = sharedobjs.InitContainersSymbolsLoader(t.contPathResolver, 1024)
 
 	// Initialize event derivation logic
 
